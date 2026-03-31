@@ -1,0 +1,9 @@
+vertices 3
+0 0
+10 0
+9.9619 0.8716
+segments 3
+0 1
+1 2
+2 0
+holes 0

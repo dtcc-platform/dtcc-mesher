@@ -1,0 +1,36 @@
+[build-system]
+requires = [
+  "scikit-build-core>=0.10",
+  "pybind11>=2.12",
+  "numpy>=1.21",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "dtcc_mesher"
+version = "0.1.0"
+description = "MIT Licensed Two-Dimensional Quality Mesh Generator"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+plot = [
+  "matplotlib>=3.7",
+]
+dev = [
+  "matplotlib>=3.7",
+  "pytest>=8",
+]
+
+[tool.scikit-build]
+minimum-version = "0.10"
+
+[tool.scikit-build.cmake.define]
+DTCC_MESHER_BUILD_PYTHON = "ON"
+DTCC_MESHER_BUILD_CLI = "ON"
+DTCC_MESHER_BUILD_TESTS = "OFF"
+DTCC_MESHER_BUILD_DEMOS = "OFF"

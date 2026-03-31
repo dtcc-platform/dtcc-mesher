@@ -1,0 +1,9 @@
+vertices 4
+0 0
+2 0
+0 2
+2 2
+segments 2
+0 3
+1 2
+holes 0

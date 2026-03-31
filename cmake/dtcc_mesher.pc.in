@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: DTCC Mesher
+Description: MIT Licensed Two-Dimensional Quality Mesh Generator
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -ldtcc_mesher -lm
+Cflags: -I${includedir}
