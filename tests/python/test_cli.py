@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import dtcc_mesher as tm
+import dtcc_mesher as dm
 
 
 def _parse_summary_text(text: str) -> dict[str, float]:
@@ -34,7 +34,7 @@ def test_cli_and_python_match(tmp_path):
     subprocess.run([cli, str(input_path), str(out_base)], check=True)
     cli_summary = _parse_summary_text((tmp_path / "square_hole_cli.summary.txt").read_text(encoding="utf-8"))
 
-    mesh = tm.generate_file(input_path)
+    mesh = dm.generate_file(input_path)
     c_api_summary = _parse_summary_text(
         subprocess.run([c_api_dump, str(input_path)], check=True, capture_output=True, text=True).stdout
     )

@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import dtcc_mesher as tm
+import dtcc_mesher as dm
 
 
 def _case_path(name: str) -> Path:
@@ -17,7 +17,7 @@ def _case_path(name: str) -> Path:
 
 
 def test_generate_points():
-    mesh = tm.generate(
+    mesh = dm.generate(
         [
             (0.0, 0.0),
             (1.0, 0.0),
@@ -36,7 +36,7 @@ def test_generate_points():
 
 
 def test_generate_pslg_and_write_svg(tmp_path):
-    mesh = tm.generate_file(_case_path("square_hole_domain.pslg"))
+    mesh = dm.generate_file(_case_path("square_hole_domain.pslg"))
     svg_path = tmp_path / "mesh.svg"
     mesh.write_svg(svg_path)
     assert svg_path.exists()
@@ -45,4 +45,4 @@ def test_generate_pslg_and_write_svg(tmp_path):
 
 def test_invalid_points_shape():
     with pytest.raises(ValueError):
-        tm.generate([(0.0, 0.0, 1.0)])
+        dm.generate([(0.0, 0.0, 1.0)])
