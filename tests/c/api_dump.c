@@ -6,12 +6,12 @@
 
 int main(int argc, char **argv)
 {
-    tm_domain domain;
-    tm_options options;
-    tm_mesh mesh;
-    tm_quality_summary summary;
-    tm_error error;
-    tm_status status;
+    dtcc_mesher_domain domain;
+    dtcc_mesher_options options;
+    dtcc_mesher_mesh mesh;
+    dtcc_mesher_quality_summary summary;
+    dtcc_mesher_error error;
+    dtcc_mesher_status status;
 
     if (argc != 2) {
         fprintf(stderr, "usage: api_dump input.(pts|pslg)\n");
@@ -23,25 +23,25 @@ int main(int argc, char **argv)
     memset(&summary, 0, sizeof(summary));
     memset(&error, 0, sizeof(error));
 
-    status = tm_read_domain_file(argv[1], &domain, &error);
-    if (status != TM_STATUS_OK) {
-        fprintf(stderr, "read failed: %s\n", error.message[0] != '\0' ? error.message : tm_status_string(status));
+    status = dtcc_mesher_read_domain_file(argv[1], &domain, &error);
+    if (status != DTCC_MESHER_STATUS_OK) {
+        fprintf(stderr, "read failed: %s\n", error.message[0] != '\0' ? error.message : dtcc_mesher_status_string(status));
         return 1;
     }
 
-    tm_options_init(&options);
-    status = tm_generate(&domain, &options, &mesh, &error);
-    if (status != TM_STATUS_OK) {
-        fprintf(stderr, "generate failed: %s\n", error.message[0] != '\0' ? error.message : tm_status_string(status));
-        tm_domain_free(&domain);
+    dtcc_mesher_options_init(&options);
+    status = dtcc_mesher_generate(&domain, &options, &mesh, &error);
+    if (status != DTCC_MESHER_STATUS_OK) {
+        fprintf(stderr, "generate failed: %s\n", error.message[0] != '\0' ? error.message : dtcc_mesher_status_string(status));
+        dtcc_mesher_domain_free(&domain);
         return 1;
     }
 
-    status = tm_analyze_mesh(&mesh, &summary, &error);
-    if (status != TM_STATUS_OK) {
-        fprintf(stderr, "analyze failed: %s\n", error.message[0] != '\0' ? error.message : tm_status_string(status));
-        tm_mesh_free(&mesh);
-        tm_domain_free(&domain);
+    status = dtcc_mesher_analyze_mesh(&mesh, &summary, &error);
+    if (status != DTCC_MESHER_STATUS_OK) {
+        fprintf(stderr, "analyze failed: %s\n", error.message[0] != '\0' ? error.message : dtcc_mesher_status_string(status));
+        dtcc_mesher_mesh_free(&mesh);
+        dtcc_mesher_domain_free(&domain);
         return 1;
     }
 
@@ -54,7 +54,7 @@ int main(int argc, char **argv)
     printf("min_angle_deg_min=%.17g\n", summary.min_angle_deg_min);
     printf("count_min_angle_lt_20=%zu\n", summary.count_min_angle_lt_20);
 
-    tm_mesh_free(&mesh);
-    tm_domain_free(&domain);
+    dtcc_mesher_mesh_free(&mesh);
+    dtcc_mesher_domain_free(&domain);
     return 0;
 }

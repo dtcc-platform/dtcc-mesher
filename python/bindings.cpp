@@ -11,10 +11,10 @@
 
 namespace py = pybind11;
 
-static std::vector<tm_point> tm_points_from_array(const py::array_t<double, py::array::c_style | py::array::forcecast> &array)
+static std::vector<dtcc_mesher_point> dtcc_mesher_points_from_array(const py::array_t<double, py::array::c_style | py::array::forcecast> &array)
 {
     auto view = array.unchecked<2>();
-    std::vector<tm_point> points(static_cast<size_t>(view.shape(0)));
+    std::vector<dtcc_mesher_point> points(static_cast<size_t>(view.shape(0)));
 
     for (py::ssize_t i = 0; i < view.shape(0); ++i) {
         points[static_cast<size_t>(i)].x = view(i, 0);
@@ -24,10 +24,10 @@ static std::vector<tm_point> tm_points_from_array(const py::array_t<double, py::
     return points;
 }
 
-static std::vector<tm_segment> tm_segments_from_array(const py::array_t<std::uint32_t, py::array::c_style | py::array::forcecast> &array)
+static std::vector<dtcc_mesher_segment> dtcc_mesher_segments_from_array(const py::array_t<std::uint32_t, py::array::c_style | py::array::forcecast> &array)
 {
     auto view = array.unchecked<2>();
-    std::vector<tm_segment> segments(static_cast<size_t>(view.shape(0)));
+    std::vector<dtcc_mesher_segment> segments(static_cast<size_t>(view.shape(0)));
 
     for (py::ssize_t i = 0; i < view.shape(0); ++i) {
         segments[static_cast<size_t>(i)].a = view(i, 0);
@@ -37,7 +37,7 @@ static std::vector<tm_segment> tm_segments_from_array(const py::array_t<std::uin
     return segments;
 }
 
-static py::array_t<double> tm_points_to_numpy(const tm_mesh &mesh)
+static py::array_t<double> dtcc_mesher_points_to_numpy(const dtcc_mesher_mesh &mesh)
 {
     py::array_t<double> array({static_cast<py::ssize_t>(mesh.num_points), static_cast<py::ssize_t>(2)});
     auto view = array.mutable_unchecked<2>();
@@ -50,7 +50,7 @@ static py::array_t<double> tm_points_to_numpy(const tm_mesh &mesh)
     return array;
 }
 
-static py::array_t<std::uint32_t> tm_triangles_to_numpy(const tm_mesh &mesh)
+static py::array_t<std::uint32_t> dtcc_mesher_triangles_to_numpy(const dtcc_mesher_mesh &mesh)
 {
     py::array_t<std::uint32_t> array({static_cast<py::ssize_t>(mesh.num_triangles), static_cast<py::ssize_t>(3)});
     auto view = array.mutable_unchecked<2>();
@@ -64,7 +64,7 @@ static py::array_t<std::uint32_t> tm_triangles_to_numpy(const tm_mesh &mesh)
     return array;
 }
 
-static py::array_t<std::uint32_t> tm_segments_to_numpy(const tm_mesh &mesh)
+static py::array_t<std::uint32_t> dtcc_mesher_segments_to_numpy(const dtcc_mesher_mesh &mesh)
 {
     py::array_t<std::uint32_t> array({static_cast<py::ssize_t>(mesh.num_segments), static_cast<py::ssize_t>(2)});
     auto view = array.mutable_unchecked<2>();
@@ -77,7 +77,7 @@ static py::array_t<std::uint32_t> tm_segments_to_numpy(const tm_mesh &mesh)
     return array;
 }
 
-static py::dict tm_summary_to_dict(const tm_quality_summary &summary)
+static py::dict dtcc_mesher_summary_to_dict(const dtcc_mesher_quality_summary &summary)
 {
     py::dict result;
 
@@ -106,7 +106,7 @@ static py::dict tm_summary_to_dict(const tm_quality_summary &summary)
     return result;
 }
 
-static py::dict tm_generate_raw(
+static py::dict dtcc_mesher_generate_raw(
     const py::array_t<double, py::array::c_style | py::array::forcecast> &points_array,
     py::object segments_object,
     py::object holes_object,
@@ -120,21 +120,21 @@ static py::dict tm_generate_raw(
     std::size_t max_protection_levels
 )
 {
-    std::vector<tm_point> points;
-    std::vector<tm_segment> segments;
-    std::vector<tm_point> holes;
-    tm_domain domain{};
-    tm_options options;
-    tm_mesh mesh{};
-    tm_quality_summary summary{};
-    tm_error error{};
-    tm_status status;
+    std::vector<dtcc_mesher_point> points;
+    std::vector<dtcc_mesher_segment> segments;
+    std::vector<dtcc_mesher_point> holes;
+    dtcc_mesher_domain domain{};
+    dtcc_mesher_options options;
+    dtcc_mesher_mesh mesh{};
+    dtcc_mesher_quality_summary summary{};
+    dtcc_mesher_error error{};
+    dtcc_mesher_status status;
 
     if (points_array.ndim() != 2 || points_array.shape(1) != 2) {
         throw std::invalid_argument("points must have shape (N, 2)");
     }
 
-    points = tm_points_from_array(points_array);
+    points = dtcc_mesher_points_from_array(points_array);
     domain.points = points.empty() ? nullptr : points.data();
     domain.num_points = points.size();
 
@@ -143,7 +143,7 @@ static py::dict tm_generate_raw(
         if (segments_array.ndim() != 2 || segments_array.shape(1) != 2) {
             throw std::invalid_argument("segments must have shape (M, 2)");
         }
-        segments = tm_segments_from_array(segments_array);
+        segments = dtcc_mesher_segments_from_array(segments_array);
         domain.segments = segments.empty() ? nullptr : segments.data();
         domain.num_segments = segments.size();
     }
@@ -153,46 +153,46 @@ static py::dict tm_generate_raw(
         if (holes_array.ndim() != 2 || holes_array.shape(1) != 2) {
             throw std::invalid_argument("holes must have shape (K, 2)");
         }
-        holes = tm_points_from_array(holes_array);
+        holes = dtcc_mesher_points_from_array(holes_array);
         domain.holes = holes.empty() ? nullptr : holes.data();
         domain.num_holes = holes.size();
     }
 
-    tm_options_init(&options);
+    dtcc_mesher_options_init(&options);
     options.min_angle_deg = min_angle_deg;
     options.enable_refinement = enable_refinement ? 1 : 0;
     options.use_offcenters = use_offcenters ? 1 : 0;
     options.verbose = verbose ? 1 : 0;
     options.enable_acute_protection = acute_mode != 0 ? 1 : 0;
-    options.acute_protection_mode = acute_mode == 1 ? TM_ACUTE_PROTECTION_SIMPLE : TM_ACUTE_PROTECTION_SHELL;
+    options.acute_protection_mode = acute_mode == 1 ? DTCC_MESHER_ACUTE_PROTECTION_SIMPLE : DTCC_MESHER_ACUTE_PROTECTION_SHELL;
     options.max_refinement_steps = max_refinement_steps;
     options.max_protection_levels = max_protection_levels;
     if (!protect_angle_object.is_none()) {
         options.protect_angle_deg = py::cast<double>(protect_angle_object);
     }
 
-    status = tm_generate(&domain, &options, &mesh, &error);
-    if (status != TM_STATUS_OK) {
-        throw std::runtime_error(error.message[0] != '\0' ? error.message : tm_status_string(status));
+    status = dtcc_mesher_generate(&domain, &options, &mesh, &error);
+    if (status != DTCC_MESHER_STATUS_OK) {
+        throw std::runtime_error(error.message[0] != '\0' ? error.message : dtcc_mesher_status_string(status));
     }
 
-    status = tm_analyze_mesh(&mesh, &summary, &error);
-    if (status != TM_STATUS_OK) {
-        tm_mesh_free(&mesh);
-        throw std::runtime_error(error.message[0] != '\0' ? error.message : tm_status_string(status));
+    status = dtcc_mesher_analyze_mesh(&mesh, &summary, &error);
+    if (status != DTCC_MESHER_STATUS_OK) {
+        dtcc_mesher_mesh_free(&mesh);
+        throw std::runtime_error(error.message[0] != '\0' ? error.message : dtcc_mesher_status_string(status));
     }
 
     py::dict result;
-    result["points"] = tm_points_to_numpy(mesh);
-    result["triangles"] = tm_triangles_to_numpy(mesh);
-    result["segments"] = tm_segments_to_numpy(mesh);
-    result["summary"] = tm_summary_to_dict(summary);
+    result["points"] = dtcc_mesher_points_to_numpy(mesh);
+    result["triangles"] = dtcc_mesher_triangles_to_numpy(mesh);
+    result["segments"] = dtcc_mesher_segments_to_numpy(mesh);
+    result["summary"] = dtcc_mesher_summary_to_dict(summary);
 
-    tm_mesh_free(&mesh);
+    dtcc_mesher_mesh_free(&mesh);
     return result;
 }
 
-static py::dict tm_analyze_raw(
+static py::dict dtcc_mesher_analyze_raw(
     const py::array_t<double, py::array::c_style | py::array::forcecast> &points_array,
     const py::array_t<std::uint32_t, py::array::c_style | py::array::forcecast> &triangles_array,
     py::object segments_object,
@@ -203,13 +203,13 @@ static py::dict tm_analyze_raw(
     std::size_t num_exempt_triangles
 )
 {
-    std::vector<tm_point> points;
-    std::vector<tm_segment> segments;
+    std::vector<dtcc_mesher_point> points;
+    std::vector<dtcc_mesher_segment> segments;
     std::vector<std::uint32_t> triangles;
-    tm_mesh mesh{};
-    tm_quality_summary summary{};
-    tm_error error{};
-    tm_status status;
+    dtcc_mesher_mesh mesh{};
+    dtcc_mesher_quality_summary summary{};
+    dtcc_mesher_error error{};
+    dtcc_mesher_status status;
 
     if (points_array.ndim() != 2 || points_array.shape(1) != 2) {
         throw std::invalid_argument("points must have shape (N, 2)");
@@ -218,7 +218,7 @@ static py::dict tm_analyze_raw(
         throw std::invalid_argument("triangles must have shape (M, 3)");
     }
 
-    points = tm_points_from_array(points_array);
+    points = dtcc_mesher_points_from_array(points_array);
     triangles.resize(static_cast<size_t>(triangles_array.shape(0)) * 3);
     {
         auto view = triangles_array.unchecked<2>();
@@ -244,17 +244,17 @@ static py::dict tm_analyze_raw(
         if (segments_array.ndim() != 2 || segments_array.shape(1) != 2) {
             throw std::invalid_argument("segments must have shape (M, 2)");
         }
-        segments = tm_segments_from_array(segments_array);
+        segments = dtcc_mesher_segments_from_array(segments_array);
         mesh.segments = segments.empty() ? nullptr : segments.data();
         mesh.num_segments = segments.size();
     }
 
-    status = tm_analyze_mesh(&mesh, &summary, &error);
-    if (status != TM_STATUS_OK) {
-        throw std::runtime_error(error.message[0] != '\0' ? error.message : tm_status_string(status));
+    status = dtcc_mesher_analyze_mesh(&mesh, &summary, &error);
+    if (status != DTCC_MESHER_STATUS_OK) {
+        throw std::runtime_error(error.message[0] != '\0' ? error.message : dtcc_mesher_status_string(status));
     }
 
-    return tm_summary_to_dict(summary);
+    return dtcc_mesher_summary_to_dict(summary);
 }
 
 PYBIND11_MODULE(_core, m)
@@ -264,7 +264,7 @@ PYBIND11_MODULE(_core, m)
 
     m.def(
         "_generate_raw",
-        &tm_generate_raw,
+        &dtcc_mesher_generate_raw,
         py::arg("points"),
         py::arg("segments") = py::none(),
         py::arg("holes") = py::none(),
@@ -279,7 +279,7 @@ PYBIND11_MODULE(_core, m)
     );
     m.def(
         "_analyze_raw",
-        &tm_analyze_raw,
+        &dtcc_mesher_analyze_raw,
         py::arg("points"),
         py::arg("triangles"),
         py::arg("segments") = py::none(),

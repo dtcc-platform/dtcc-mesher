@@ -8,7 +8,7 @@
 #include "io_pslg.h"
 #include "dtcc_mesher_api_internal.h"
 
-static const double tm_api_pi = 3.14159265358979323846;
+static const double dtcc_mesher_api_pi = 3.14159265358979323846;
 
 typedef struct {
     double area;
@@ -16,9 +16,9 @@ typedef struct {
     double max_angle_deg;
     double edge_ratio;
     double radius_edge_ratio;
-} tm_api_triangle_metrics;
+} dtcc_mesher_triangle_metrics;
 
-static int tm_has_suffix(const char *path, const char *suffix)
+static int dtcc_mesher_has_suffix(const char *path, const char *suffix)
 {
     size_t path_len;
     size_t suffix_len;
@@ -32,19 +32,19 @@ static int tm_has_suffix(const char *path, const char *suffix)
     return path_len >= suffix_len && strcmp(path + path_len - suffix_len, suffix) == 0;
 }
 
-static double tm_distance_xy(const tm_point *a, const tm_point *b)
+static double dtcc_mesher_distance_xy(const dtcc_mesher_point *a, const dtcc_mesher_point *b)
 {
     double dx = a->x - b->x;
     double dy = a->y - b->y;
     return sqrt(dx * dx + dy * dy);
 }
 
-static double tm_orient_xy(const tm_point *a, const tm_point *b, const tm_point *c)
+static double dtcc_mesher_orient_xy(const dtcc_mesher_point *a, const dtcc_mesher_point *b, const dtcc_mesher_point *c)
 {
     return (b->x - a->x) * (c->y - a->y) - (b->y - a->y) * (c->x - a->x);
 }
 
-static double tm_angle_from_lengths(double left, double right, double opposite)
+static double dtcc_mesher_angle_from_lengths(double left, double right, double opposite)
 {
     double cosine = (left * left + right * right - opposite * opposite) / (2.0 * left * right);
 
@@ -55,10 +55,10 @@ static double tm_angle_from_lengths(double left, double right, double opposite)
         cosine = 1.0;
     }
 
-    return acos(cosine) * 180.0 / tm_api_pi;
+    return acos(cosine) * 180.0 / dtcc_mesher_api_pi;
 }
 
-static void tm_update_stats(double value, double *min_value, double *max_value, double *sum_value, size_t index)
+static void dtcc_mesher_update_stats(double value, double *min_value, double *max_value, double *sum_value, size_t index)
 {
     if (index == 0 || value < *min_value) {
         *min_value = value;
@@ -69,25 +69,25 @@ static void tm_update_stats(double value, double *min_value, double *max_value, 
     *sum_value += value;
 }
 
-static tm_status tm_validate_public_mesh(const tm_mesh *mesh, tm_error *out_error)
+static dtcc_mesher_status dtcc_mesher_validate_public_mesh(const dtcc_mesher_mesh *mesh, dtcc_mesher_error *out_error)
 {
     size_t tri_index;
 
     if (mesh == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_INVALID_ARGUMENT, "mesh must not be null");
-        return TM_STATUS_INVALID_ARGUMENT;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "mesh must not be null");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
     if (mesh->num_points != 0 && mesh->points == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_INVALID_ARGUMENT, "mesh points must not be null when num_points > 0");
-        return TM_STATUS_INVALID_ARGUMENT;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "mesh points must not be null when num_points > 0");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
     if (mesh->num_triangles != 0 && mesh->triangles == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_INVALID_ARGUMENT, "mesh triangles must not be null when num_triangles > 0");
-        return TM_STATUS_INVALID_ARGUMENT;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "mesh triangles must not be null when num_triangles > 0");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
     if (mesh->num_segments != 0 && mesh->segments == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_INVALID_ARGUMENT, "mesh segments must not be null when num_segments > 0");
-        return TM_STATUS_INVALID_ARGUMENT;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "mesh segments must not be null when num_segments > 0");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
 
     for (tri_index = 0; tri_index < mesh->num_triangles; ++tri_index) {
@@ -96,30 +96,30 @@ static tm_status tm_validate_public_mesh(const tm_mesh *mesh, tm_error *out_erro
         uint32_t c = mesh->triangles[tri_index * 3 + 2];
 
         if ((size_t) a >= mesh->num_points || (size_t) b >= mesh->num_points || (size_t) c >= mesh->num_points) {
-            tm_api_set_error(out_error, TM_STATUS_GEOMETRY, "triangle %zu references an out-of-range point index", tri_index);
-            return TM_STATUS_GEOMETRY;
+            dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_GEOMETRY, "triangle %zu references an out-of-range point index", tri_index);
+            return DTCC_MESHER_STATUS_GEOMETRY;
         }
     }
 
-    return TM_STATUS_OK;
+    return DTCC_MESHER_STATUS_OK;
 }
 
-static tm_status tm_compute_triangle_metrics(
-    const tm_mesh *mesh,
+static dtcc_mesher_status dtcc_mesher_compute_triangle_metrics(
+    const dtcc_mesher_mesh *mesh,
     size_t tri_index,
-    tm_api_triangle_metrics *out_metrics,
-    tm_error *out_error
+    dtcc_mesher_triangle_metrics *out_metrics,
+    dtcc_mesher_error *out_error
 )
 {
-    const tm_point *a = &mesh->points[mesh->triangles[tri_index * 3 + 0]];
-    const tm_point *b = &mesh->points[mesh->triangles[tri_index * 3 + 1]];
-    const tm_point *c = &mesh->points[mesh->triangles[tri_index * 3 + 2]];
-    double len_ab = tm_distance_xy(a, b);
-    double len_bc = tm_distance_xy(b, c);
-    double len_ca = tm_distance_xy(c, a);
+    const dtcc_mesher_point *a = &mesh->points[mesh->triangles[tri_index * 3 + 0]];
+    const dtcc_mesher_point *b = &mesh->points[mesh->triangles[tri_index * 3 + 1]];
+    const dtcc_mesher_point *c = &mesh->points[mesh->triangles[tri_index * 3 + 2]];
+    double len_ab = dtcc_mesher_distance_xy(a, b);
+    double len_bc = dtcc_mesher_distance_xy(b, c);
+    double len_ca = dtcc_mesher_distance_xy(c, a);
     double shortest = len_ab;
     double longest = len_ab;
-    double area = fabs(tm_orient_xy(a, b, c)) * 0.5;
+    double area = fabs(dtcc_mesher_orient_xy(a, b, c)) * 0.5;
     double angle_a;
     double angle_b;
     double angle_c;
@@ -143,13 +143,13 @@ static tm_status tm_compute_triangle_metrics(
     }
 
     if (area <= 0.0 || shortest <= 0.0) {
-        tm_api_set_error(out_error, TM_STATUS_GEOMETRY, "triangle %zu is degenerate", tri_index);
-        return TM_STATUS_GEOMETRY;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_GEOMETRY, "triangle %zu is degenerate", tri_index);
+        return DTCC_MESHER_STATUS_GEOMETRY;
     }
 
-    angle_a = tm_angle_from_lengths(len_ab, len_ca, len_bc);
-    angle_b = tm_angle_from_lengths(len_ab, len_bc, len_ca);
-    angle_c = tm_angle_from_lengths(len_bc, len_ca, len_ab);
+    angle_a = dtcc_mesher_angle_from_lengths(len_ab, len_ca, len_bc);
+    angle_b = dtcc_mesher_angle_from_lengths(len_ab, len_bc, len_ca);
+    angle_c = dtcc_mesher_angle_from_lengths(len_bc, len_ca, len_ab);
     min_angle = angle_a;
     max_angle = angle_a;
     if (angle_b < min_angle) {
@@ -174,27 +174,27 @@ static tm_status tm_compute_triangle_metrics(
     out_metrics->max_angle_deg = max_angle;
     out_metrics->edge_ratio = edge_ratio;
     out_metrics->radius_edge_ratio = radius_edge_ratio;
-    return TM_STATUS_OK;
+    return DTCC_MESHER_STATUS_OK;
 }
 
-tm_status tm_analyze_mesh(const tm_mesh *mesh, tm_quality_summary *out_summary, tm_error *out_error)
+dtcc_mesher_status dtcc_mesher_analyze_mesh(const dtcc_mesher_mesh *mesh, dtcc_mesher_quality_summary *out_summary, dtcc_mesher_error *out_error)
 {
     double area_sum = 0.0;
     double min_angle_sum = 0.0;
     double edge_ratio_sum = 0.0;
     double radius_edge_ratio_sum = 0.0;
     size_t tri_index;
-    tm_status status;
+    dtcc_mesher_status status;
 
-    tm_api_clear_error(out_error);
+    dtcc_mesher_api_clear_error(out_error);
     if (out_summary == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_INVALID_ARGUMENT, "out_summary must not be null");
-        return TM_STATUS_INVALID_ARGUMENT;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "out_summary must not be null");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
     memset(out_summary, 0, sizeof(*out_summary));
 
-    status = tm_validate_public_mesh(mesh, out_error);
-    if (status != TM_STATUS_OK) {
+    status = dtcc_mesher_validate_public_mesh(mesh, out_error);
+    if (status != DTCC_MESHER_STATUS_OK) {
         return status;
     }
 
@@ -208,29 +208,29 @@ tm_status tm_analyze_mesh(const tm_mesh *mesh, tm_quality_summary *out_summary, 
     out_summary->triangle_count = mesh->num_triangles;
 
     for (tri_index = 0; tri_index < mesh->num_triangles; ++tri_index) {
-        tm_api_triangle_metrics metrics;
+        dtcc_mesher_triangle_metrics metrics;
 
-        status = tm_compute_triangle_metrics(mesh, tri_index, &metrics, out_error);
-        if (status != TM_STATUS_OK) {
+        status = dtcc_mesher_compute_triangle_metrics(mesh, tri_index, &metrics, out_error);
+        if (status != DTCC_MESHER_STATUS_OK) {
             return status;
         }
 
-        tm_update_stats(metrics.area, &out_summary->area_min, &out_summary->area_max, &area_sum, tri_index);
-        tm_update_stats(
+        dtcc_mesher_update_stats(metrics.area, &out_summary->area_min, &out_summary->area_max, &area_sum, tri_index);
+        dtcc_mesher_update_stats(
             metrics.min_angle_deg,
             &out_summary->min_angle_deg_min,
             &out_summary->min_angle_deg_max,
             &min_angle_sum,
             tri_index
         );
-        tm_update_stats(
+        dtcc_mesher_update_stats(
             metrics.edge_ratio,
             &out_summary->edge_ratio_min,
             &out_summary->edge_ratio_max,
             &edge_ratio_sum,
             tri_index
         );
-        tm_update_stats(
+        dtcc_mesher_update_stats(
             metrics.radius_edge_ratio,
             &out_summary->radius_edge_ratio_min,
             &out_summary->radius_edge_ratio_max,
@@ -253,45 +253,45 @@ tm_status tm_analyze_mesh(const tm_mesh *mesh, tm_quality_summary *out_summary, 
         out_summary->radius_edge_ratio_mean = radius_edge_ratio_sum / (double) mesh->num_triangles;
     }
 
-    return TM_STATUS_OK;
+    return DTCC_MESHER_STATUS_OK;
 }
 
-tm_status tm_read_domain_file(const char *path, tm_domain *out_domain, tm_error *out_error)
+dtcc_mesher_status dtcc_mesher_read_domain_file(const char *path, dtcc_mesher_domain *out_domain, dtcc_mesher_error *out_error)
 {
     TMPoint *points = NULL;
     size_t point_count = 0;
     TMPSLG pslg;
     TMStatus internal_status;
-    tm_status status;
+    dtcc_mesher_status status;
     size_t i;
 
-    tm_api_clear_error(out_error);
+    dtcc_mesher_api_clear_error(out_error);
     if (path == NULL || out_domain == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_INVALID_ARGUMENT, "path and out_domain must not be null");
-        return TM_STATUS_INVALID_ARGUMENT;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "path and out_domain must not be null");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
 
     memset(out_domain, 0, sizeof(*out_domain));
     memset(&pslg, 0, sizeof(pslg));
 
-    if (tm_has_suffix(path, ".pslg")) {
+    if (dtcc_mesher_has_suffix(path, ".pslg")) {
         internal_status = tm_read_pslg_file(path, &pslg);
         if (internal_status != TM_OK) {
-            status = tm_api_map_status(internal_status);
-            tm_api_set_error(out_error, status, "%s", tm_internal_status_string(internal_status));
+            status = dtcc_mesher_api_map_status(internal_status);
+            dtcc_mesher_api_set_error(out_error, status, "%s", tm_internal_status_string(internal_status));
             return status;
         }
 
-        out_domain->points = (tm_point *) calloc(pslg.point_count, sizeof(*out_domain->points));
-        out_domain->segments = (tm_segment *) calloc(pslg.segment_count, sizeof(*out_domain->segments));
-        out_domain->holes = (tm_point *) calloc(pslg.hole_count, sizeof(*out_domain->holes));
+        out_domain->points = (dtcc_mesher_point *) calloc(pslg.point_count, sizeof(*out_domain->points));
+        out_domain->segments = (dtcc_mesher_segment *) calloc(pslg.segment_count, sizeof(*out_domain->segments));
+        out_domain->holes = (dtcc_mesher_point *) calloc(pslg.hole_count, sizeof(*out_domain->holes));
         if ((pslg.point_count != 0 && out_domain->points == NULL) ||
             (pslg.segment_count != 0 && out_domain->segments == NULL) ||
             (pslg.hole_count != 0 && out_domain->holes == NULL)) {
             tm_free_pslg(&pslg);
-            tm_domain_free(out_domain);
-            tm_api_set_error(out_error, TM_STATUS_NO_MEMORY, "failed to allocate domain arrays for %s", path);
-            return TM_STATUS_NO_MEMORY;
+            dtcc_mesher_domain_free(out_domain);
+            dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_NO_MEMORY, "failed to allocate domain arrays for %s", path);
+            return DTCC_MESHER_STATUS_NO_MEMORY;
         }
 
         out_domain->num_points = pslg.point_count;
@@ -312,26 +312,26 @@ tm_status tm_read_domain_file(const char *path, tm_domain *out_domain, tm_error 
         }
 
         tm_free_pslg(&pslg);
-        return TM_STATUS_OK;
+        return DTCC_MESHER_STATUS_OK;
     }
 
-    if (!tm_has_suffix(path, ".pts")) {
-        tm_api_set_error(out_error, TM_STATUS_INVALID_ARGUMENT, "unsupported input extension for %s", path);
-        return TM_STATUS_INVALID_ARGUMENT;
+    if (!dtcc_mesher_has_suffix(path, ".pts")) {
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "unsupported input extension for %s", path);
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
 
     internal_status = tm_read_points_file(path, &points, &point_count);
     if (internal_status != TM_OK) {
-        status = tm_api_map_status(internal_status);
-        tm_api_set_error(out_error, status, "%s", tm_internal_status_string(internal_status));
+        status = dtcc_mesher_api_map_status(internal_status);
+        dtcc_mesher_api_set_error(out_error, status, "%s", tm_internal_status_string(internal_status));
         return status;
     }
 
-    out_domain->points = (tm_point *) calloc(point_count, sizeof(*out_domain->points));
+    out_domain->points = (dtcc_mesher_point *) calloc(point_count, sizeof(*out_domain->points));
     if (out_domain->points == NULL && point_count != 0) {
         free(points);
-        tm_api_set_error(out_error, TM_STATUS_NO_MEMORY, "failed to allocate %zu domain points", point_count);
-        return TM_STATUS_NO_MEMORY;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_NO_MEMORY, "failed to allocate %zu domain points", point_count);
+        return DTCC_MESHER_STATUS_NO_MEMORY;
     }
     out_domain->num_points = point_count;
 
@@ -341,10 +341,10 @@ tm_status tm_read_domain_file(const char *path, tm_domain *out_domain, tm_error 
     }
 
     free(points);
-    return TM_STATUS_OK;
+    return DTCC_MESHER_STATUS_OK;
 }
 
-void tm_domain_free(tm_domain *domain)
+void dtcc_mesher_domain_free(dtcc_mesher_domain *domain)
 {
     if (domain == NULL) {
         return;
@@ -361,27 +361,27 @@ void tm_domain_free(tm_domain *domain)
     domain->num_holes = 0;
 }
 
-tm_status tm_write_triangles(const tm_mesh *mesh, const char *path, tm_error *out_error)
+dtcc_mesher_status dtcc_mesher_write_triangles(const dtcc_mesher_mesh *mesh, const char *path, dtcc_mesher_error *out_error)
 {
     FILE *stream;
     size_t tri_index;
-    tm_status status;
+    dtcc_mesher_status status;
 
-    tm_api_clear_error(out_error);
+    dtcc_mesher_api_clear_error(out_error);
     if (path == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_INVALID_ARGUMENT, "path must not be null");
-        return TM_STATUS_INVALID_ARGUMENT;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "path must not be null");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
 
-    status = tm_validate_public_mesh(mesh, out_error);
-    if (status != TM_STATUS_OK) {
+    status = dtcc_mesher_validate_public_mesh(mesh, out_error);
+    if (status != DTCC_MESHER_STATUS_OK) {
         return status;
     }
 
     stream = fopen(path, "w");
     if (stream == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_IO, "failed to open %s for writing", path);
-        return TM_STATUS_IO;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to open %s for writing", path);
+        return DTCC_MESHER_STATUS_IO;
     }
 
     for (tri_index = 0; tri_index < mesh->num_triangles; ++tri_index) {
@@ -393,20 +393,20 @@ tm_status tm_write_triangles(const tm_mesh *mesh, const char *path, tm_error *ou
                 mesh->triangles[tri_index * 3 + 2]
             ) < 0) {
             fclose(stream);
-            tm_api_set_error(out_error, TM_STATUS_IO, "failed to write %s", path);
-            return TM_STATUS_IO;
+            dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to write %s", path);
+            return DTCC_MESHER_STATUS_IO;
         }
     }
 
     if (fclose(stream) != 0) {
-        tm_api_set_error(out_error, TM_STATUS_IO, "failed to close %s", path);
-        return TM_STATUS_IO;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to close %s", path);
+        return DTCC_MESHER_STATUS_IO;
     }
 
-    return TM_STATUS_OK;
+    return DTCC_MESHER_STATUS_OK;
 }
 
-tm_status tm_write_svg(const tm_mesh *mesh, const char *path, tm_error *out_error)
+dtcc_mesher_status dtcc_mesher_write_svg(const dtcc_mesher_mesh *mesh, const char *path, dtcc_mesher_error *out_error)
 {
     FILE *stream;
     double min_x;
@@ -420,21 +420,21 @@ tm_status tm_write_svg(const tm_mesh *mesh, const char *path, tm_error *out_erro
     double canvas_w;
     double canvas_h;
     size_t i;
-    tm_status status;
+    dtcc_mesher_status status;
 
-    tm_api_clear_error(out_error);
+    dtcc_mesher_api_clear_error(out_error);
     if (path == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_INVALID_ARGUMENT, "path must not be null");
-        return TM_STATUS_INVALID_ARGUMENT;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "path must not be null");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
 
-    status = tm_validate_public_mesh(mesh, out_error);
-    if (status != TM_STATUS_OK) {
+    status = dtcc_mesher_validate_public_mesh(mesh, out_error);
+    if (status != DTCC_MESHER_STATUS_OK) {
         return status;
     }
     if (mesh->num_points == 0) {
-        tm_api_set_error(out_error, TM_STATUS_INVALID_ARGUMENT, "mesh must contain at least one point");
-        return TM_STATUS_INVALID_ARGUMENT;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "mesh must contain at least one point");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
 
     min_x = mesh->points[0].x;
@@ -472,8 +472,8 @@ tm_status tm_write_svg(const tm_mesh *mesh, const char *path, tm_error *out_erro
 
     stream = fopen(path, "w");
     if (stream == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_IO, "failed to open %s for writing", path);
-        return TM_STATUS_IO;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to open %s for writing", path);
+        return DTCC_MESHER_STATUS_IO;
     }
 
     if (fprintf(
@@ -486,14 +486,14 @@ tm_status tm_write_svg(const tm_mesh *mesh, const char *path, tm_error *out_erro
         ) < 0 ||
         fprintf(stream, "  <rect width=\"100%%\" height=\"100%%\" fill=\"white\"/>\n") < 0) {
         fclose(stream);
-        tm_api_set_error(out_error, TM_STATUS_IO, "failed to write %s", path);
-        return TM_STATUS_IO;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to write %s", path);
+        return DTCC_MESHER_STATUS_IO;
     }
 
     for (i = 0; i < mesh->num_triangles; ++i) {
-        const tm_point *a = &mesh->points[mesh->triangles[i * 3 + 0]];
-        const tm_point *b = &mesh->points[mesh->triangles[i * 3 + 1]];
-        const tm_point *c = &mesh->points[mesh->triangles[i * 3 + 2]];
+        const dtcc_mesher_point *a = &mesh->points[mesh->triangles[i * 3 + 0]];
+        const dtcc_mesher_point *b = &mesh->points[mesh->triangles[i * 3 + 1]];
+        const dtcc_mesher_point *c = &mesh->points[mesh->triangles[i * 3 + 2]];
         double ax = margin + (a->x - min_x) * scale;
         double ay = canvas_h - margin - (a->y - min_y) * scale;
         double bx = margin + (b->x - min_x) * scale;
@@ -512,14 +512,14 @@ tm_status tm_write_svg(const tm_mesh *mesh, const char *path, tm_error *out_erro
                 cy
             ) < 0) {
             fclose(stream);
-            tm_api_set_error(out_error, TM_STATUS_IO, "failed to write %s", path);
-            return TM_STATUS_IO;
+            dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to write %s", path);
+            return DTCC_MESHER_STATUS_IO;
         }
     }
 
     for (i = 0; i < mesh->num_segments; ++i) {
-        const tm_point *a = &mesh->points[mesh->segments[i].a];
-        const tm_point *b = &mesh->points[mesh->segments[i].b];
+        const dtcc_mesher_point *a = &mesh->points[mesh->segments[i].a];
+        const dtcc_mesher_point *b = &mesh->points[mesh->segments[i].b];
         double ax = margin + (a->x - min_x) * scale;
         double ay = canvas_h - margin - (a->y - min_y) * scale;
         double bx = margin + (b->x - min_x) * scale;
@@ -534,8 +534,8 @@ tm_status tm_write_svg(const tm_mesh *mesh, const char *path, tm_error *out_erro
                 by
             ) < 0) {
             fclose(stream);
-            tm_api_set_error(out_error, TM_STATUS_IO, "failed to write %s", path);
-            return TM_STATUS_IO;
+            dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to write %s", path);
+            return DTCC_MESHER_STATUS_IO;
         }
     }
 
@@ -552,41 +552,41 @@ tm_status tm_write_svg(const tm_mesh *mesh, const char *path, tm_error *out_erro
                     i
                 ) < 0) {
                 fclose(stream);
-                tm_api_set_error(out_error, TM_STATUS_IO, "failed to write %s", path);
-                return TM_STATUS_IO;
+                dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to write %s", path);
+                return DTCC_MESHER_STATUS_IO;
             }
         }
     }
 
     if (fprintf(stream, "</svg>\n") < 0 || fclose(stream) != 0) {
-        tm_api_set_error(out_error, TM_STATUS_IO, "failed to finalize %s", path);
-        return TM_STATUS_IO;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to finalize %s", path);
+        return DTCC_MESHER_STATUS_IO;
     }
 
-    return TM_STATUS_OK;
+    return DTCC_MESHER_STATUS_OK;
 }
 
-tm_status tm_write_quality_csv(const tm_mesh *mesh, const char *path, tm_error *out_error)
+dtcc_mesher_status dtcc_mesher_write_quality_csv(const dtcc_mesher_mesh *mesh, const char *path, dtcc_mesher_error *out_error)
 {
     FILE *stream;
     size_t tri_index;
-    tm_status status;
+    dtcc_mesher_status status;
 
-    tm_api_clear_error(out_error);
+    dtcc_mesher_api_clear_error(out_error);
     if (path == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_INVALID_ARGUMENT, "path must not be null");
-        return TM_STATUS_INVALID_ARGUMENT;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "path must not be null");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
 
-    status = tm_validate_public_mesh(mesh, out_error);
-    if (status != TM_STATUS_OK) {
+    status = dtcc_mesher_validate_public_mesh(mesh, out_error);
+    if (status != DTCC_MESHER_STATUS_OK) {
         return status;
     }
 
     stream = fopen(path, "w");
     if (stream == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_IO, "failed to open %s for writing", path);
-        return TM_STATUS_IO;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to open %s for writing", path);
+        return DTCC_MESHER_STATUS_IO;
     }
 
     if (fprintf(
@@ -594,15 +594,15 @@ tm_status tm_write_quality_csv(const tm_mesh *mesh, const char *path, tm_error *
             "tri_id,v0,v1,v2,area,min_angle_deg,max_angle_deg,edge_ratio,radius_edge_ratio\n"
         ) < 0) {
         fclose(stream);
-        tm_api_set_error(out_error, TM_STATUS_IO, "failed to write %s", path);
-        return TM_STATUS_IO;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to write %s", path);
+        return DTCC_MESHER_STATUS_IO;
     }
 
     for (tri_index = 0; tri_index < mesh->num_triangles; ++tri_index) {
-        tm_api_triangle_metrics metrics;
+        dtcc_mesher_triangle_metrics metrics;
 
-        status = tm_compute_triangle_metrics(mesh, tri_index, &metrics, out_error);
-        if (status != TM_STATUS_OK) {
+        status = dtcc_mesher_compute_triangle_metrics(mesh, tri_index, &metrics, out_error);
+        if (status != DTCC_MESHER_STATUS_OK) {
             fclose(stream);
             return status;
         }
@@ -621,40 +621,40 @@ tm_status tm_write_quality_csv(const tm_mesh *mesh, const char *path, tm_error *
                 metrics.radius_edge_ratio
             ) < 0) {
             fclose(stream);
-            tm_api_set_error(out_error, TM_STATUS_IO, "failed to write %s", path);
-            return TM_STATUS_IO;
+            dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to write %s", path);
+            return DTCC_MESHER_STATUS_IO;
         }
     }
 
     if (fclose(stream) != 0) {
-        tm_api_set_error(out_error, TM_STATUS_IO, "failed to close %s", path);
-        return TM_STATUS_IO;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to close %s", path);
+        return DTCC_MESHER_STATUS_IO;
     }
 
-    return TM_STATUS_OK;
+    return DTCC_MESHER_STATUS_OK;
 }
 
-tm_status tm_write_quality_summary(const tm_mesh *mesh, const char *path, tm_error *out_error)
+dtcc_mesher_status dtcc_mesher_write_quality_summary(const dtcc_mesher_mesh *mesh, const char *path, dtcc_mesher_error *out_error)
 {
     FILE *stream;
-    tm_quality_summary summary;
-    tm_status status;
+    dtcc_mesher_quality_summary summary;
+    dtcc_mesher_status status;
 
-    tm_api_clear_error(out_error);
+    dtcc_mesher_api_clear_error(out_error);
     if (path == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_INVALID_ARGUMENT, "path must not be null");
-        return TM_STATUS_INVALID_ARGUMENT;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "path must not be null");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
 
-    status = tm_analyze_mesh(mesh, &summary, out_error);
-    if (status != TM_STATUS_OK) {
+    status = dtcc_mesher_analyze_mesh(mesh, &summary, out_error);
+    if (status != DTCC_MESHER_STATUS_OK) {
         return status;
     }
 
     stream = fopen(path, "w");
     if (stream == NULL) {
-        tm_api_set_error(out_error, TM_STATUS_IO, "failed to open %s for writing", path);
-        return TM_STATUS_IO;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to open %s for writing", path);
+        return DTCC_MESHER_STATUS_IO;
     }
 
     if (fprintf(stream, "triangle_count=%zu\n", summary.triangle_count) < 0 ||
@@ -680,14 +680,14 @@ tm_status tm_write_quality_summary(const tm_mesh *mesh, const char *path, tm_err
         fprintf(stream, "count_min_angle_lt_20=%zu\n", summary.count_min_angle_lt_20) < 0 ||
         fprintf(stream, "count_min_angle_lt_30=%zu\n", summary.count_min_angle_lt_30) < 0) {
         fclose(stream);
-        tm_api_set_error(out_error, TM_STATUS_IO, "failed to write %s", path);
-        return TM_STATUS_IO;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to write %s", path);
+        return DTCC_MESHER_STATUS_IO;
     }
 
     if (fclose(stream) != 0) {
-        tm_api_set_error(out_error, TM_STATUS_IO, "failed to close %s", path);
-        return TM_STATUS_IO;
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_IO, "failed to close %s", path);
+        return DTCC_MESHER_STATUS_IO;
     }
 
-    return TM_STATUS_OK;
+    return DTCC_MESHER_STATUS_OK;
 }

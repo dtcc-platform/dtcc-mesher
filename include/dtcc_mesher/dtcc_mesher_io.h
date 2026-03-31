@@ -7,13 +7,33 @@
 extern "C" {
 #endif
 
-TM_EXPORT tm_status tm_read_domain_file(const char *path, tm_domain *out_domain, tm_error *out_error);
-TM_EXPORT void tm_domain_free(tm_domain *domain);
+DTCC_MESHER_EXPORT dtcc_mesher_status dtcc_mesher_read_domain_file(
+    const char *path,
+    dtcc_mesher_domain *out_domain,
+    dtcc_mesher_error *out_error
+);
+DTCC_MESHER_EXPORT void dtcc_mesher_domain_free(dtcc_mesher_domain *domain);
 
-TM_EXPORT tm_status tm_write_triangles(const tm_mesh *mesh, const char *path, tm_error *out_error);
-TM_EXPORT tm_status tm_write_svg(const tm_mesh *mesh, const char *path, tm_error *out_error);
-TM_EXPORT tm_status tm_write_quality_csv(const tm_mesh *mesh, const char *path, tm_error *out_error);
-TM_EXPORT tm_status tm_write_quality_summary(const tm_mesh *mesh, const char *path, tm_error *out_error);
+DTCC_MESHER_EXPORT dtcc_mesher_status dtcc_mesher_write_triangles(
+    const dtcc_mesher_mesh *mesh,
+    const char *path,
+    dtcc_mesher_error *out_error
+);
+DTCC_MESHER_EXPORT dtcc_mesher_status dtcc_mesher_write_svg(
+    const dtcc_mesher_mesh *mesh,
+    const char *path,
+    dtcc_mesher_error *out_error
+);
+DTCC_MESHER_EXPORT dtcc_mesher_status dtcc_mesher_write_quality_csv(
+    const dtcc_mesher_mesh *mesh,
+    const char *path,
+    dtcc_mesher_error *out_error
+);
+DTCC_MESHER_EXPORT dtcc_mesher_status dtcc_mesher_write_quality_summary(
+    const dtcc_mesher_mesh *mesh,
+    const char *path,
+    dtcc_mesher_error *out_error
+);
 
 #ifdef __cplusplus
 }

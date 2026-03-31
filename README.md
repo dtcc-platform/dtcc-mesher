@@ -94,14 +94,14 @@ Public headers:
 #include "dtcc_mesher/dtcc_mesher.h"
 
 int main(void) {
-    tm_point points[] = {
+    dtcc_mesher_point points[] = {
         {0.0, 0.0},
         {1.0, 0.0},
         {1.0, 1.0},
         {0.0, 1.0},
         {0.5, 0.5}
     };
-    tm_domain domain = {
+    dtcc_mesher_domain domain = {
         .points = points,
         .num_points = 5,
         .segments = NULL,
@@ -109,20 +109,20 @@ int main(void) {
         .holes = NULL,
         .num_holes = 0
     };
-    tm_options options;
-    tm_mesh mesh;
-    tm_quality_summary summary;
-    tm_error error;
+    dtcc_mesher_options options;
+    dtcc_mesher_mesh mesh;
+    dtcc_mesher_quality_summary summary;
+    dtcc_mesher_error error;
 
-    tm_options_init(&options);
-    if (tm_generate(&domain, &options, &mesh, &error) != TM_STATUS_OK) {
+    dtcc_mesher_options_init(&options);
+    if (dtcc_mesher_generate(&domain, &options, &mesh, &error) != DTCC_MESHER_STATUS_OK) {
         fprintf(stderr, "%s\n", error.message);
         return 1;
     }
 
-    tm_analyze_mesh(&mesh, &summary, &error);
+    dtcc_mesher_analyze_mesh(&mesh, &summary, &error);
     printf("triangles=%zu min_angle=%.2f\n", summary.triangle_count, summary.min_angle_deg_min);
-    tm_mesh_free(&mesh);
+    dtcc_mesher_mesh_free(&mesh);
     return 0;
 }
 ```

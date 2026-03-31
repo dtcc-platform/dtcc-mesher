@@ -7,9 +7,9 @@
 
 #include "mesh.h"
 
-tm_status tm_api_map_status(TMStatus status);
-void tm_api_clear_error(tm_error *error);
-void tm_api_set_error(tm_error *error, tm_status status, const char *format, ...);
-void tm_api_set_error_va(tm_error *error, tm_status status, const char *format, va_list args);
+dtcc_mesher_status dtcc_mesher_api_map_status(TMStatus status);
+void dtcc_mesher_api_clear_error(dtcc_mesher_error *error);
+void dtcc_mesher_api_set_error(dtcc_mesher_error *error, dtcc_mesher_status status, const char *format, ...);
+void dtcc_mesher_api_set_error_va(dtcc_mesher_error *error, dtcc_mesher_status status, const char *format, va_list args);
 
 #endif

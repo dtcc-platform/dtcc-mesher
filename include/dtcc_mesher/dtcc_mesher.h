@@ -8,12 +8,12 @@
 
 #if defined(_WIN32) && defined(DTCC_MESHER_SHARED)
 #  if defined(dtcc_mesher_EXPORTS)
-#    define TM_EXPORT __declspec(dllexport)
+#    define DTCC_MESHER_EXPORT __declspec(dllexport)
 #  else
-#    define TM_EXPORT __declspec(dllimport)
+#    define DTCC_MESHER_EXPORT __declspec(dllimport)
 #  endif
 #else
-#  define TM_EXPORT
+#  define DTCC_MESHER_EXPORT
 #endif
 
 #ifdef __cplusplus
@@ -23,27 +23,27 @@ extern "C" {
 typedef struct {
     double x;
     double y;
-} tm_point;
+} dtcc_mesher_point;
 
 typedef struct {
     uint32_t a;
     uint32_t b;
-} tm_segment;
+} dtcc_mesher_segment;
 
 typedef struct {
-    tm_point *points;
+    dtcc_mesher_point *points;
     size_t num_points;
-    tm_segment *segments;
+    dtcc_mesher_segment *segments;
     size_t num_segments;
-    tm_point *holes;
+    dtcc_mesher_point *holes;
     size_t num_holes;
-} tm_domain;
+} dtcc_mesher_domain;
 
 typedef enum {
-    TM_ACUTE_PROTECTION_NONE = 0,
-    TM_ACUTE_PROTECTION_SIMPLE = 1,
-    TM_ACUTE_PROTECTION_SHELL = 2
-} tm_acute_protection_mode;
+    DTCC_MESHER_ACUTE_PROTECTION_NONE = 0,
+    DTCC_MESHER_ACUTE_PROTECTION_SIMPLE = 1,
+    DTCC_MESHER_ACUTE_PROTECTION_SHELL = 2
+} dtcc_mesher_acute_protection_mode;
 
 typedef struct {
     double min_angle_deg;
@@ -51,20 +51,20 @@ typedef struct {
     int use_offcenters;
     int verbose;
     int enable_acute_protection;
-    tm_acute_protection_mode acute_protection_mode;
+    dtcc_mesher_acute_protection_mode acute_protection_mode;
     double protect_angle_deg;
     size_t max_refinement_steps;
     size_t max_protection_levels;
-} tm_options;
+} dtcc_mesher_options;
 
 typedef struct {
-    tm_point *points;
+    dtcc_mesher_point *points;
     size_t num_points;
 
     uint32_t *triangles;
     size_t num_triangles;
 
-    tm_segment *segments;
+    dtcc_mesher_segment *segments;
     size_t num_segments;
 
     size_t num_input_points;
@@ -72,7 +72,7 @@ typedef struct {
     size_t num_triangle_split_points;
     size_t num_protected_corners;
     size_t num_exempt_triangles;
-} tm_mesh;
+} dtcc_mesher_mesh;
 
 typedef struct {
     size_t point_count;
@@ -97,40 +97,40 @@ typedef struct {
     double radius_edge_ratio_max;
     size_t count_min_angle_lt_20;
     size_t count_min_angle_lt_30;
-} tm_quality_summary;
+} dtcc_mesher_quality_summary;
 
 typedef enum {
-    TM_STATUS_OK = 0,
-    TM_STATUS_INVALID_ARGUMENT,
-    TM_STATUS_GEOMETRY,
-    TM_STATUS_IO,
-    TM_STATUS_PARSE,
-    TM_STATUS_NO_MEMORY,
-    TM_STATUS_INTERNAL
-} tm_status;
+    DTCC_MESHER_STATUS_OK = 0,
+    DTCC_MESHER_STATUS_INVALID_ARGUMENT,
+    DTCC_MESHER_STATUS_GEOMETRY,
+    DTCC_MESHER_STATUS_IO,
+    DTCC_MESHER_STATUS_PARSE,
+    DTCC_MESHER_STATUS_NO_MEMORY,
+    DTCC_MESHER_STATUS_INTERNAL
+} dtcc_mesher_status;
 
 typedef struct {
-    tm_status code;
+    dtcc_mesher_status code;
     char message[256];
-} tm_error;
+} dtcc_mesher_error;
 
-TM_EXPORT void tm_options_init(tm_options *options);
-TM_EXPORT const char *tm_status_string(tm_status status);
+DTCC_MESHER_EXPORT void dtcc_mesher_options_init(dtcc_mesher_options *options);
+DTCC_MESHER_EXPORT const char *dtcc_mesher_status_string(dtcc_mesher_status status);
 
-TM_EXPORT tm_status tm_generate(
-    const tm_domain *domain,
-    const tm_options *options,
-    tm_mesh *out_mesh,
-    tm_error *out_error
+DTCC_MESHER_EXPORT dtcc_mesher_status dtcc_mesher_generate(
+    const dtcc_mesher_domain *domain,
+    const dtcc_mesher_options *options,
+    dtcc_mesher_mesh *out_mesh,
+    dtcc_mesher_error *out_error
 );
 
-TM_EXPORT tm_status tm_analyze_mesh(
-    const tm_mesh *mesh,
-    tm_quality_summary *out_summary,
-    tm_error *out_error
+DTCC_MESHER_EXPORT dtcc_mesher_status dtcc_mesher_analyze_mesh(
+    const dtcc_mesher_mesh *mesh,
+    dtcc_mesher_quality_summary *out_summary,
+    dtcc_mesher_error *out_error
 );
 
-TM_EXPORT void tm_mesh_free(tm_mesh *mesh);
+DTCC_MESHER_EXPORT void dtcc_mesher_mesh_free(dtcc_mesher_mesh *mesh);
 
 #ifdef __cplusplus
 }

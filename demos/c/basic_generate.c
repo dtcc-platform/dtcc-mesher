@@ -5,7 +5,7 @@
 
 int main(void)
 {
-    tm_point points[] = {
+    dtcc_mesher_point points[] = {
         {0.0, 0.0},
         {10.0, 0.0},
         {10.0, 10.0},
@@ -15,19 +15,19 @@ int main(void)
         {7.0, 7.0},
         {3.0, 7.0}
     };
-    tm_segment segments[] = {
+    dtcc_mesher_segment segments[] = {
         {0, 1}, {1, 2}, {2, 3}, {3, 0},
         {4, 5}, {5, 6}, {6, 7}, {7, 4}
     };
-    tm_point holes[] = {
+    dtcc_mesher_point holes[] = {
         {5.0, 5.0}
     };
-    tm_domain domain;
-    tm_options options;
-    tm_mesh mesh;
-    tm_error error;
-    tm_quality_summary summary;
-    tm_status status;
+    dtcc_mesher_domain domain;
+    dtcc_mesher_options options;
+    dtcc_mesher_mesh mesh;
+    dtcc_mesher_error error;
+    dtcc_mesher_quality_summary summary;
+    dtcc_mesher_status status;
 
     domain.points = points;
     domain.num_points = sizeof(points) / sizeof(points[0]);
@@ -36,26 +36,26 @@ int main(void)
     domain.holes = holes;
     domain.num_holes = sizeof(holes) / sizeof(holes[0]);
 
-    tm_options_init(&options);
+    dtcc_mesher_options_init(&options);
     options.verbose = 1;
 
-    status = tm_generate(&domain, &options, &mesh, &error);
-    if (status != TM_STATUS_OK) {
-        fprintf(stderr, "generate failed: %s\n", error.message[0] != '\0' ? error.message : tm_status_string(status));
+    status = dtcc_mesher_generate(&domain, &options, &mesh, &error);
+    if (status != DTCC_MESHER_STATUS_OK) {
+        fprintf(stderr, "generate failed: %s\n", error.message[0] != '\0' ? error.message : dtcc_mesher_status_string(status));
         return 1;
     }
 
-    status = tm_analyze_mesh(&mesh, &summary, &error);
-    if (status != TM_STATUS_OK) {
-        fprintf(stderr, "analyze failed: %s\n", error.message[0] != '\0' ? error.message : tm_status_string(status));
-        tm_mesh_free(&mesh);
+    status = dtcc_mesher_analyze_mesh(&mesh, &summary, &error);
+    if (status != DTCC_MESHER_STATUS_OK) {
+        fprintf(stderr, "analyze failed: %s\n", error.message[0] != '\0' ? error.message : dtcc_mesher_status_string(status));
+        dtcc_mesher_mesh_free(&mesh);
         return 1;
     }
 
-    if (tm_write_svg(&mesh, "demo_basic.svg", &error) != TM_STATUS_OK ||
-        tm_write_quality_summary(&mesh, "demo_basic.summary.txt", &error) != TM_STATUS_OK) {
+    if (dtcc_mesher_write_svg(&mesh, "demo_basic.svg", &error) != DTCC_MESHER_STATUS_OK ||
+        dtcc_mesher_write_quality_summary(&mesh, "demo_basic.summary.txt", &error) != DTCC_MESHER_STATUS_OK) {
         fprintf(stderr, "write failed: %s\n", error.message[0] != '\0' ? error.message : "I/O error");
-        tm_mesh_free(&mesh);
+        dtcc_mesher_mesh_free(&mesh);
         return 1;
     }
 
@@ -66,6 +66,6 @@ int main(void)
         summary.min_angle_deg_min
     );
 
-    tm_mesh_free(&mesh);
+    dtcc_mesher_mesh_free(&mesh);
     return 0;
 }
