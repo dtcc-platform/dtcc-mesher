@@ -13,6 +13,12 @@ def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _array_2d(rows: list[list[float]], *, dtype) -> np.ndarray:
+    if not rows:
+        return np.empty((0, 2), dtype=dtype)
+    return np.array(rows, dtype=dtype)
+
+
 def read_domain_file(path: str | Path) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None]:
     path = Path(path)
     text = path.read_text(encoding="utf-8").splitlines()
@@ -24,7 +30,7 @@ def read_domain_file(path: str | Path) -> tuple[np.ndarray, np.ndarray | None, n
         data_lines.append(stripped)
 
     if path.suffix == ".pts":
-        points = np.array([[float(x), float(y)] for x, y in (line.split() for line in data_lines)], dtype=np.float64)
+        points = _array_2d([[float(x), float(y)] for x, y in (line.split() for line in data_lines)], dtype=np.float64)
         return points, None, None
 
     if path.suffix != ".pslg":
@@ -37,7 +43,7 @@ def read_domain_file(path: str | Path) -> tuple[np.ndarray, np.ndarray | None, n
     num_points = int(header[1])
     cursor += 1
 
-    points = np.array(
+    points = _array_2d(
         [[float(x), float(y)] for x, y in (data_lines[cursor + i].split() for i in range(num_points))],
         dtype=np.float64,
     )
@@ -49,7 +55,7 @@ def read_domain_file(path: str | Path) -> tuple[np.ndarray, np.ndarray | None, n
     num_segments = int(header[1])
     cursor += 1
 
-    segments = np.array(
+    segments = _array_2d(
         [[int(a), int(b)] for a, b in (data_lines[cursor + i].split() for i in range(num_segments))],
         dtype=np.uint32,
     )
@@ -62,7 +68,7 @@ def read_domain_file(path: str | Path) -> tuple[np.ndarray, np.ndarray | None, n
             raise ValueError(f"invalid holes header in {path}")
         num_holes = int(header[1])
         cursor += 1
-        holes = np.array(
+        holes = _array_2d(
             [[float(x), float(y)] for x, y in (data_lines[cursor + i].split() for i in range(num_holes))],
             dtype=np.float64,
         )

@@ -153,11 +153,17 @@ import dtcc_mesher as dm
 
 mesh = dm.generate_file("tests/cases/square_hole_domain.pslg", off_centers=True)
 mesh.write_quality_summary("square_hole.summary.txt")
-mesh.plot()
+mesh.show(title="square_hole_domain")
 ```
 
 ```sh
 python -m dtcc_mesher tests/cases/square_hole_domain.pslg build/out/square_hole_py
+```
+
+Plotting requires:
+
+```sh
+python -m pip install ".[plot]"
 ```
 
 ## Demos
@@ -167,6 +173,14 @@ python -m dtcc_mesher tests/cases/square_hole_domain.pslg build/out/square_hole_
 - `demos/python/basic_generate.py`
 - `demos/python/plot_mesh.py`
 - `demos/cli/README.md`
+
+Interactive plotting demo:
+
+```sh
+python demos/python/plot_mesh.py
+python demos/python/plot_mesh.py --list
+python demos/python/plot_mesh.py city_tight_downtown_domain --off-centers
+```
 
 ## Tests
 

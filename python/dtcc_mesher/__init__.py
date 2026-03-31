@@ -8,15 +8,18 @@ import numpy as np
 
 from . import _core
 from . import _io
-from ._plot import plot_mesh
+from ._plot import format_summary_lines, plot_mesh, plot_mesh_with_summary, show_mesh
 
 __all__ = [
     "Mesh",
     "QualitySummary",
     "generate",
     "generate_file",
+    "format_summary_lines",
     "plot_mesh",
+    "plot_mesh_with_summary",
     "read_domain_file",
+    "show_mesh",
 ]
 
 __version__ = "0.1.0"
@@ -70,6 +73,12 @@ class Mesh:
     def plot(self, **kwargs):
         return plot_mesh(self, **kwargs)
 
+    def show(self, **kwargs):
+        return show_mesh(self, **kwargs)
+
+    def summary_lines(self) -> list[str]:
+        return format_summary_lines(self.summary)
+
     def analyze(self) -> QualitySummary:
         raw = _core._analyze_raw(
             self.points,
@@ -89,6 +98,8 @@ def _coerce_points(points: object | None) -> np.ndarray | None:
     if points is None:
         return None
     array = np.asarray(points, dtype=np.float64)
+    if array.size == 0:
+        return np.empty((0, 2), dtype=np.float64)
     if array.ndim != 2 or array.shape[1] != 2:
         raise ValueError("expected an array with shape (N, 2)")
     return np.ascontiguousarray(array)
