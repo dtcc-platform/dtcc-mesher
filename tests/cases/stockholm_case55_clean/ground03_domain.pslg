@@ -1,0 +1,20 @@
+# Extracted from dtcc-core sandbox/mesh_quality_survey.py case 55.
+# Tile bounds (EPSG:3006): 675000 6581000 675500 6581500
+# Full post-cleaning dtcc_mesher input corpus exported from dtcc-core after footprint conditioning.
+# Source kind/index/component: ground 3 0
+# Mesher parameters: max_mesh_size=10.0, min_angle=25.0, refine=False
+# Polygon area=57.3734656342568, holes=0, points=6, segments=6, hole_markers=0
+vertices 6
+675054.838080157 6581299.87122084
+675047.828540078 6581302.40861042
+675040.819 6581304.946
+675042.111 6581308.514
+675049.14 6581306.026
+675056.169 6581303.538
+segments 6
+0 1
+1 2
+2 3
+3 4
+4 5
+5 0

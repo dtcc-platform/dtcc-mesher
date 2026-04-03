@@ -43,6 +43,14 @@ def resolve_case(selection: str | None, cases: list[Path]) -> Path:
     if selection in by_stem:
         return by_stem[selection]
 
+    direct_path = Path(selection)
+    if direct_path.exists():
+        return direct_path.resolve()
+
+    case_relative_path = CASES_DIR / selection
+    if case_relative_path.exists():
+        return case_relative_path.resolve()
+
     raise SystemExit(f"unknown case: {selection}")
 
 
@@ -140,14 +148,19 @@ def main() -> int:
     print(f"path: {case_path}")
     print()
 
-    mesh = dm.generate_file(
-        case_path,
-        min_angle=args.min_angle,
-        refine=not args.no_refine,
-        off_centers=args.off_centers,
-        acute_protection=args.acute_protection,
-        verbose=not args.quiet,
-    )
+    try:
+        mesh = dm.generate_file(
+            case_path,
+            min_angle=args.min_angle,
+            refine=not args.no_refine,
+            off_centers=args.off_centers,
+            acute_protection=args.acute_protection,
+            verbose=not args.quiet,
+        )
+    except RuntimeError as exc:
+        print(f"meshing failed: {exc}")
+        print("This case could not be generated with the current dtcc_mesher settings.")
+        return 1
 
     print("summary:")
     for line in format_summary_lines(mesh.summary):
