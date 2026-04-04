@@ -40,7 +40,10 @@ def test_stockholm_case55_clean_domain_files_match_manifest():
         path = case_dir / entry["filename"]
         assert path.exists()
 
-        points, segments, holes = dm.read_domain_file(path)
+        domain = dm.read_domain(path)
+        points = domain.points
+        segments = domain.segments
+        holes = domain.holes
 
         assert points.shape == (entry["point_count"], 2)
         assert segments is not None
@@ -65,7 +68,10 @@ def test_stockholm_case55_clean_generate_partition_matches_manifest():
         path = case_dir / entry["filename"]
 
         try:
-            dm.generate_file(path, min_angle=min_angle, refine=refine)
+            dm.mesh(
+                dm.read_domain(path),
+                options=dm.MeshingOptions(min_angle=min_angle, refine=refine),
+            )
         except RuntimeError as exc:
             seen_failures[entry["filename"]] = str(exc)
             assert entry["status"] == "error"

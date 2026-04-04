@@ -1,7 +1,7 @@
 Stockholm case `55` exported from `dtcc-core` after footprint cleaning.
 
 What is stored here:
-- One `.pslg` file per actual `dtcc_mesher.generate(...)` call used by the flat-mesh path for this tile.
+- One `.pslg` file per actual `dtcc_mesher.mesh(dtcc_mesher.Domain(...))` call used by the flat-mesh path for this tile.
 - `groundXX_domain.pslg` files for the ground-domain components after subtracting cleaned buildings from the tile bounds.
 - `buildingXX_domain.pslg` files for the cleaned building domains.
 - `manifest.json` with tile metadata, mesher settings, per-domain sizes, and the current `dtcc_mesher` success/failure result for each domain.

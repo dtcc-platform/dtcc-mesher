@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import generate_file
+from . import MeshingOptions, mesh, read_domain
 
 
 def main() -> int:
@@ -22,19 +22,21 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    mesh = generate_file(
-        args.input_path,
-        min_angle=args.min_angle,
-        max_area=args.max_area,
-        max_edge_length=args.max_edge_length,
-        refine=not args.no_refine,
-        off_centers=args.off_centers,
-        acute_protection=args.acute_protection,
+    generated_mesh = mesh(
+        read_domain(args.input_path),
+        options=MeshingOptions(
+            min_angle=args.min_angle,
+            max_area=args.max_area,
+            max_edge_length=args.max_edge_length,
+            refine=not args.no_refine,
+            off_centers=args.off_centers,
+            acute_protection=args.acute_protection,
+        ),
     )
-    mesh.write_triangles(f"{args.out_base}.tri")
-    mesh.write_svg(f"{args.out_base}.svg")
-    mesh.write_quality_csv(f"{args.out_base}.metrics.csv")
-    mesh.write_quality_summary(f"{args.out_base}.summary.txt")
+    generated_mesh.write_triangles(f"{args.out_base}.tri")
+    generated_mesh.write_svg(f"{args.out_base}.svg")
+    generated_mesh.write_quality_csv(f"{args.out_base}.metrics.csv")
+    generated_mesh.write_quality_summary(f"{args.out_base}.summary.txt")
     return 0
 
 

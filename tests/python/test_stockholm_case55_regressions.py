@@ -43,7 +43,10 @@ def test_stockholm_case55_domain_files_round_trip_shapes(
     expected_sizes: tuple[int, int, int],
     _expected_error: str,
 ):
-    points, segments, holes = dm.read_domain_file(_case_path(name))
+    domain = dm.read_domain(_case_path(name))
+    points = domain.points
+    segments = domain.segments
+    holes = domain.holes
 
     assert points.shape == (expected_sizes[0], 2)
     assert segments is not None
@@ -65,11 +68,17 @@ def test_stockholm_case55_domains_capture_current_failure_modes(
     expected_error: str,
 ):
     with pytest.raises(RuntimeError, match=re.escape(expected_error)):
-        dm.generate_file(_case_path(name), min_angle=25.0, refine=False)
+        dm.mesh(
+            dm.read_domain(_case_path(name)),
+            options=dm.MeshingOptions(min_angle=25.0, refine=False),
+        )
 
 
 def test_stockholm_case55_building31_domain_now_succeeds():
-    mesh = dm.generate_file(_case_path(_CASE55_FIXED_DOMAIN), min_angle=25.0, refine=False)
+    mesh = dm.mesh(
+        dm.read_domain(_case_path(_CASE55_FIXED_DOMAIN)),
+        options=dm.MeshingOptions(min_angle=25.0, refine=False),
+    )
 
     assert mesh.points.shape == (85, 2)
     assert mesh.triangles.shape == (106, 3)

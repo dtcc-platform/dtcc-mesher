@@ -149,13 +149,15 @@ def main() -> int:
     print()
 
     try:
-        mesh = dm.generate_file(
-            case_path,
-            min_angle=args.min_angle,
-            refine=not args.no_refine,
-            off_centers=args.off_centers,
-            acute_protection=args.acute_protection,
-            verbose=not args.quiet,
+        mesh = dm.mesh(
+            dm.read_domain(case_path),
+            options=dm.MeshingOptions(
+                min_angle=args.min_angle,
+                refine=not args.no_refine,
+                off_centers=args.off_centers,
+                acute_protection=args.acute_protection,
+                verbose=not args.quiet,
+            ),
         )
     except RuntimeError as exc:
         print(f"meshing failed: {exc}")

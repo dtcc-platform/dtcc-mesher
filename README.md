@@ -132,14 +132,16 @@ int main(void) {
 ```python
 import dtcc_mesher as dm
 
-mesh = dm.generate(
-    [
-        (0.0, 0.0),
-        (1.0, 0.0),
-        (1.0, 1.0),
-        (0.0, 1.0),
-        (0.5, 0.5),
-    ]
+mesh = dm.mesh(
+    dm.Domain(
+        points=[
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (0.5, 0.5),
+        ]
+    )
 )
 
 print(mesh.points.shape)
@@ -151,15 +153,38 @@ mesh.write_svg("mesh.svg")
 ```python
 import dtcc_mesher as dm
 
-mesh = dm.generate_file(
-    "tests/cases/square_hole_domain.pslg",
-    min_angle=25.0,
-    max_area=0.5,
-    off_centers=True,
+mesh = dm.mesh(
+    dm.read_domain("tests/cases/square_hole_domain.pslg"),
+    options=dm.MeshingOptions(
+        min_angle=25.0,
+        max_area=0.5,
+        off_centers=True,
+    ),
 )
 mesh.write_quality_summary("square_hole.summary.txt")
 mesh.show(title="square_hole_domain")
 ```
+
+```python
+import dtcc_mesher as dm
+from shapely.geometry import box
+
+mesh = dm.mesh(
+    dm.Coverage(
+        [box(0.0, 0.0, 0.5, 1.0), box(0.5, 0.0, 1.0, 1.0)],
+        markers=[10, 20],
+    ),
+    options=dm.MeshingOptions(max_edge_length=0.25, refine=False),
+)
+```
+
+Primary Python API:
+
+- `dm.mesh(...)` is the single entry point for meshing
+- `dm.Domain(...)` and `dm.Domain.from_loops(...)` are for PSLG / point-segment-hole inputs
+- `dm.Coverage(...)` is for polygon coverage inputs with region markers
+- `dm.read_domain(...)` reads `.pts` / `.pslg` files into a `Domain`
+- `dm.MeshingOptions(...)` carries the meshing controls
 
 ```sh
 python -m dtcc_mesher tests/cases/square_hole_domain.pslg build/out/square_hole_py
