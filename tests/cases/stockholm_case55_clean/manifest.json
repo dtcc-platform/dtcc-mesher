@@ -851,7 +851,7 @@
       "segment_count": 188,
       "hole_marker_count": 10,
       "status": "error",
-      "error": "duplicate coordinate / touching rings across distinct loop vertices",
+      "error": "segment graph endpoint lies on another segment interior",
       "triangle_count": null
     },
     {
@@ -1047,7 +1047,7 @@
       "segment_count": 103,
       "hole_marker_count": 4,
       "status": "error",
-      "error": "duplicate coordinate / touching rings across distinct loop vertices",
+      "error": "segment graph endpoint lies on another segment interior",
       "triangle_count": null
     },
     {
@@ -1089,7 +1089,7 @@
       "segment_count": 233,
       "hole_marker_count": 11,
       "status": "error",
-      "error": "duplicate coordinate / touching rings across distinct loop vertices",
+      "error": "segment graph endpoint lies on another segment interior",
       "triangle_count": null
     },
     {

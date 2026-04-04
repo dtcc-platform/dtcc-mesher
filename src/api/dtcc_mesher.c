@@ -357,6 +357,8 @@ void dtcc_mesher_options_init(dtcc_mesher_options *options)
     }
 
     options->min_angle_deg = 20.0;
+    options->max_area = 0.0;
+    options->max_edge_length = 0.0;
     options->enable_refinement = 1;
     options->use_offcenters = 0;
     options->verbose = 0;
@@ -428,19 +430,29 @@ dtcc_mesher_status dtcc_mesher_generate(
         dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "min_angle_deg must be in the range (0, 90)");
         return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
+    if (options->max_area < 0.0) {
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "max_area must be non-negative");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
+    }
+    if (options->max_edge_length < 0.0) {
+        dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "max_edge_length must be non-negative");
+        return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
+    }
     if (options->protect_angle_deg < 0.0 || options->protect_angle_deg >= 180.0) {
         dtcc_mesher_api_set_error(out_error, DTCC_MESHER_STATUS_INVALID_ARGUMENT, "protect_angle_deg must be in the range [0, 180)");
         return DTCC_MESHER_STATUS_INVALID_ARGUMENT;
     }
 
     build_options.verbose = options->verbose;
-    build_options.refine = options->enable_refinement;
+    build_options.refine = options->enable_refinement || options->max_area > 0.0;
     build_options.use_offcenters = options->use_offcenters;
     build_options.protect_acute_corners = options->enable_acute_protection;
     build_options.acute_mode = options->acute_protection_mode == DTCC_MESHER_ACUTE_PROTECTION_SIMPLE ?
         TM_ACUTE_MODE_SIMPLE :
         TM_ACUTE_MODE_SHELL;
     build_options.min_angle_deg = options->min_angle_deg;
+    build_options.max_area = options->max_area;
+    build_options.max_edge_length = options->max_edge_length;
     build_options.protect_angle_deg = options->protect_angle_deg;
     build_options.max_refinement_steps = options->max_refinement_steps;
     build_options.max_protection_levels = options->max_protection_levels;

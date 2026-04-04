@@ -176,6 +176,8 @@ static int load_pslg_mesh_with_options(
     options.protect_acute_corners = protect_acute_corners;
     options.acute_mode = acute_mode;
     options.min_angle_deg = min_angle_deg;
+    options.max_area = 0.0;
+    options.max_edge_length = 0.0;
     options.protect_angle_deg = 0.0;
     options.max_refinement_steps = 0;
     options.max_protection_levels = 6;
@@ -1210,6 +1212,8 @@ static int test_acute_wedge_needs_protection(void)
     options.protect_acute_corners = 0;
     options.acute_mode = TM_ACUTE_MODE_SHELL;
     options.min_angle_deg = 20.0;
+    options.max_area = 0.0;
+    options.max_edge_length = 0.0;
     options.protect_angle_deg = 0.0;
     options.max_refinement_steps = 0;
     options.max_protection_levels = 6;

@@ -188,7 +188,12 @@ if(DTCC_MESHER_BUILD_PYTHON)
   pybind11_add_module(dtcc_mesher_python MODULE python/bindings.cpp)
   target_compile_features(dtcc_mesher_python PRIVATE cxx_std_17)
   target_link_libraries(dtcc_mesher_python PRIVATE dtcc_mesher)
-  target_include_directories(dtcc_mesher_python PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_include_directories(
+    dtcc_mesher_python
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+  )
   set_target_properties(dtcc_mesher_python PROPERTIES
     OUTPUT_NAME _core
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/python/dtcc_mesher

@@ -12,17 +12,17 @@ _CASE55_BAD_DOMAINS = [
     (
         "stockholm_case55_clean/building03_domain.pslg",
         (273, 188, 10),
-        "duplicate coordinate / touching rings across distinct loop vertices",
+        "segment graph endpoint lies on another segment interior",
     ),
     (
         "stockholm_case55_clean/building17_domain.pslg",
         (156, 103, 4),
-        "duplicate coordinate / touching rings across distinct loop vertices",
+        "segment graph endpoint lies on another segment interior",
     ),
     (
         "stockholm_case55_clean/building20_domain.pslg",
         (366, 233, 11),
-        "duplicate coordinate / touching rings across distinct loop vertices",
+        "segment graph endpoint lies on another segment interior",
     ),
 ]
 

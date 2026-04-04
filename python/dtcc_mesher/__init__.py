@@ -8,12 +8,15 @@ import numpy as np
 
 from . import _core
 from . import _io
+from ._coverage import build_coverage_domain
 from ._plot import format_summary_lines, plot_mesh, plot_mesh_with_summary, show_mesh
 
 __all__ = [
     "Mesh",
     "QualitySummary",
     "generate",
+    "generate_coverage",
+    "generate_graph",
     "generate_file",
     "format_summary_lines",
     "plot_mesh",
@@ -57,6 +60,7 @@ class Mesh:
     triangles: np.ndarray
     segments: np.ndarray
     summary: QualitySummary
+    markers: np.ndarray | None = None
 
     def write_svg(self, path: str | Path) -> None:
         _io.write_svg(self, path)
@@ -128,6 +132,15 @@ def _summary_from_raw(raw: dict) -> QualitySummary:
     return QualitySummary(**raw)
 
 
+def _coerce_markers(markers: object | None) -> np.ndarray | None:
+    if markers is None:
+        return None
+    array = np.asarray(markers, dtype=np.int32)
+    if array.ndim != 1:
+        raise ValueError("expected a marker array with shape (N,)")
+    return np.ascontiguousarray(array)
+
+
 def generate(
     points: object,
     *,
@@ -135,6 +148,7 @@ def generate(
     holes: object | None = None,
     min_angle: float = 20.0,
     max_area: float | None = None,
+    max_edge_length: float | None = None,
     refine: bool = True,
     off_centers: bool = False,
     verbose: bool = False,
@@ -143,9 +157,6 @@ def generate(
     max_refine_steps: int = 0,
     max_protection_levels: int = 6,
 ) -> Mesh:
-    if max_area is not None:
-        raise NotImplementedError("max_area is not implemented in dtcc_mesher yet")
-
     points_array = _coerce_points(points)
     segments_array = _coerce_segments(segments)
     holes_array = _coerce_points(holes)
@@ -155,6 +166,8 @@ def generate(
         segments_array,
         holes_array,
         min_angle,
+        max_area,
+        max_edge_length,
         refine,
         off_centers,
         verbose,
@@ -169,6 +182,101 @@ def generate(
         triangles=np.asarray(raw["triangles"], dtype=np.uint32),
         segments=np.asarray(raw["segments"], dtype=np.uint32),
         summary=_summary_from_raw(raw["summary"]),
+        markers=np.asarray(raw["markers"], dtype=np.int32) if "markers" in raw else None,
+    )
+
+
+def generate_graph(
+    points: object,
+    *,
+    segments: object,
+    region_points: object,
+    region_markers: object,
+    min_angle: float = 20.0,
+    max_area: float | None = None,
+    max_edge_length: float | None = None,
+    refine: bool = True,
+    off_centers: bool = False,
+    verbose: bool = False,
+    acute_protection: Literal["none", "simple", "shell"] = "shell",
+    protect_angle: float | None = None,
+    max_refine_steps: int = 0,
+    max_protection_levels: int = 6,
+) -> Mesh:
+    points_array = _coerce_points(points)
+    segments_array = _coerce_segments(segments)
+    region_points_array = _coerce_points(region_points)
+    region_markers_array = _coerce_markers(region_markers)
+
+    if points_array is None or segments_array is None:
+        raise ValueError("points and segments are required for coverage meshing")
+    if region_points_array is None or region_markers_array is None:
+        raise ValueError("region_points and region_markers are required for coverage meshing")
+
+    raw = _core._generate_coverage_raw(
+        points_array,
+        segments_array,
+        region_points_array,
+        region_markers_array,
+        min_angle,
+        max_area,
+        max_edge_length,
+        refine,
+        off_centers,
+        verbose,
+        _acute_mode_value(acute_protection),
+        protect_angle,
+        max_refine_steps,
+        max_protection_levels,
+    )
+
+    return Mesh(
+        points=np.asarray(raw["points"], dtype=np.float64),
+        triangles=np.asarray(raw["triangles"], dtype=np.uint32),
+        segments=np.asarray(raw["segments"], dtype=np.uint32),
+        summary=_summary_from_raw(raw["summary"]),
+        markers=np.asarray(raw["markers"], dtype=np.int32),
+    )
+
+
+def generate_coverage(
+    polygons: object,
+    *,
+    markers: object,
+    min_angle: float = 20.0,
+    max_area: float | None = None,
+    max_edge_length: float | None = None,
+    refine: bool = True,
+    off_centers: bool = False,
+    verbose: bool = False,
+    acute_protection: Literal["none", "simple", "shell"] = "shell",
+    protect_angle: float | None = None,
+    max_refine_steps: int = 0,
+    max_protection_levels: int = 6,
+    tolerance: float = 1e-9,
+) -> Mesh:
+    coverage_points, coverage_segments, region_points, region_markers = build_coverage_domain(
+        polygons,
+        markers,
+        max_edge_length=max_edge_length,
+        tolerance=tolerance,
+    )
+
+    return generate_graph(
+        coverage_points,
+        segments=coverage_segments,
+        region_points=region_points,
+        region_markers=region_markers,
+        min_angle=min_angle,
+        max_area=max_area,
+        max_edge_length=max_edge_length,
+        refine=refine,
+        off_centers=off_centers,
+        verbose=verbose,
+        acute_protection=acute_protection,
+        protect_angle=protect_angle,
+        max_refine_steps=max_refine_steps,
+        max_protection_levels=max_protection_levels,
     )
 
 

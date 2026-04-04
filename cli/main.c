@@ -60,7 +60,7 @@ static void dtcc_mesher_print_usage(FILE *stream)
 {
     fprintf(
         stream,
-        "usage: dtcc_mesher [-h|--help] [--version] [-v|--verbose] [--refine|--no-refine] [--off-centers|--no-off-centers] [--acute-protection|--no-acute-protection] [--simple-acute-protection|--shell-acute-protection] [--min-angle deg] [--protect-angle deg] [--max-refine-steps n] [--max-protection-levels n] input.(pts|pslg) outbase\n"
+        "usage: dtcc_mesher [-h|--help] [--version] [-v|--verbose] [--refine|--no-refine] [--off-centers|--no-off-centers] [--acute-protection|--no-acute-protection] [--simple-acute-protection|--shell-acute-protection] [--min-angle deg] [--max-area area] [--protect-angle deg] [--max-refine-steps n] [--max-protection-levels n] input.(pts|pslg) outbase\n"
     );
 }
 
@@ -135,6 +135,12 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[argi], "--min-angle") == 0) {
             argi += 1;
             if (argi >= argc || !dtcc_mesher_parse_double_arg(argv[argi], &options.min_angle_deg)) {
+                dtcc_mesher_print_usage(stderr);
+                return EXIT_FAILURE;
+            }
+        } else if (strcmp(argv[argi], "--max-area") == 0) {
+            argi += 1;
+            if (argi >= argc || !dtcc_mesher_parse_double_arg(argv[argi], &options.max_area)) {
                 dtcc_mesher_print_usage(stderr);
                 return EXIT_FAILURE;
             }

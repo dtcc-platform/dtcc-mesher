@@ -74,11 +74,14 @@ def test_stockholm_case55_clean_generate_partition_matches_manifest():
             success_count += 1
             assert entry["status"] == "ok"
 
-    expected_failures = {
-        entry["filename"]: entry["error"]
+    assert success_count == manifest["summary"]["domain_count"] - manifest["summary"]["failing_domain_count"]
+    assert set(seen_failures) == {
+        entry["filename"]
         for entry in manifest["domains"]
         if entry["status"] == "error"
     }
-
-    assert success_count == manifest["summary"]["domain_count"] - manifest["summary"]["failing_domain_count"]
-    assert seen_failures == expected_failures
+    for entry in manifest["domains"]:
+        if entry["status"] != "error":
+            continue
+        assert entry["filename"] in seen_failures
+        assert entry["error"] in seen_failures[entry["filename"]]

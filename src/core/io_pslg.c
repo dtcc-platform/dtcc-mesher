@@ -11,12 +11,12 @@
 
 static char tm_pslg_error_detail[256];
 
-static void tm_clear_pslg_error_detail(void)
+void tm_clear_pslg_error_detail(void)
 {
     tm_pslg_error_detail[0] = '\0';
 }
 
-static void tm_set_pslg_error_detail(const char *format, ...)
+void tm_set_pslg_error_detail(const char *format, ...)
 {
     va_list args;
 
@@ -118,7 +118,13 @@ static int tm_segments_intersect_closed(const double a[2], const double b[2], co
     return 0;
 }
 
-static TMStatus tm_validate_segments(const TMPoint *points, size_t point_count, const TMSegment *segments, size_t segment_count)
+static TMStatus tm_validate_segments(
+    const TMPoint *points,
+    size_t point_count,
+    const TMSegment *segments,
+    size_t segment_count,
+    int require_loop_topology
+)
 {
     size_t *degree = NULL;
     size_t first_index;
@@ -126,9 +132,11 @@ static TMStatus tm_validate_segments(const TMPoint *points, size_t point_count, 
 
     tm_clear_pslg_error_detail();
 
-    degree = (size_t *) calloc(point_count, sizeof(*degree));
-    if (degree == NULL) {
-        return TM_ERR_ALLOC;
+    if (require_loop_topology) {
+        degree = (size_t *) calloc(point_count, sizeof(*degree));
+        if (degree == NULL) {
+            return TM_ERR_ALLOC;
+        }
     }
 
     for (first_index = 0; first_index < segment_count; ++first_index) {
@@ -145,13 +153,19 @@ static TMStatus tm_validate_segments(const TMPoint *points, size_t point_count, 
         }
 
         if (first->v[0] == first->v[1] || tm_point_equals_xy(&points[first->v[0]], points[first->v[1]].xy)) {
-            tm_set_pslg_error_detail("duplicate coordinate / zero-length segment in PSLG");
+            tm_set_pslg_error_detail(
+                "duplicate coordinate / zero-length segment in segment graph at indices (%d, %d)",
+                first->v[0],
+                first->v[1]
+            );
             status = TM_ERR_INVALID_PSLG;
             goto cleanup;
         }
 
-        degree[first->v[0]] += 1;
-        degree[first->v[1]] += 1;
+        if (require_loop_topology) {
+            degree[first->v[0]] += 1;
+            degree[first->v[1]] += 1;
+        }
 
         for (second_index = first_index + 1; second_index < segment_count; ++second_index) {
             const TMSegment *second = &segments[second_index];
@@ -160,7 +174,11 @@ static TMStatus tm_validate_segments(const TMPoint *points, size_t point_count, 
 
             if ((first->v[0] == second->v[0] && first->v[1] == second->v[1]) ||
                 (first->v[0] == second->v[1] && first->v[1] == second->v[0])) {
-                tm_set_pslg_error_detail("duplicate segment in PSLG");
+                tm_set_pslg_error_detail(
+                    "duplicate segment in segment graph at segment indices %zu and %zu",
+                    first_index,
+                    second_index
+                );
                 status = TM_ERR_INVALID_PSLG;
                 goto cleanup;
             }
@@ -186,7 +204,11 @@ static TMStatus tm_validate_segments(const TMPoint *points, size_t point_count, 
                 }
 
                 if (!endpoint_ok) {
-                    tm_set_pslg_error_detail("duplicate coordinate / touching rings across distinct loop vertices");
+                    tm_set_pslg_error_detail(
+                        "segment graph endpoint lies on another segment interior at segment indices %zu and %zu",
+                        first_index,
+                        second_index
+                    );
                     status = TM_ERR_INVALID_PSLG;
                     goto cleanup;
                 }
@@ -194,25 +216,54 @@ static TMStatus tm_validate_segments(const TMPoint *points, size_t point_count, 
                 continue;
             }
 
+            if (tm_point_on_closed_segment(a, b, c) ||
+                tm_point_on_closed_segment(a, b, d) ||
+                tm_point_on_closed_segment(c, d, a) ||
+                tm_point_on_closed_segment(c, d, b)) {
+                tm_set_pslg_error_detail(
+                    "segment graph endpoint lies on another segment interior at segment indices %zu and %zu",
+                    first_index,
+                    second_index
+                );
+                status = TM_ERR_INVALID_PSLG;
+                goto cleanup;
+            }
+
             if (tm_segments_intersect_closed(a, b, c, d)) {
-                tm_set_pslg_error_detail("intersecting segments in PSLG");
+                tm_set_pslg_error_detail(
+                    "intersecting segments in segment graph at indices %zu and %zu",
+                    first_index,
+                    second_index
+                );
                 status = TM_ERR_INVALID_PSLG;
                 goto cleanup;
             }
         }
     }
 
-    for (first_index = 0; first_index < point_count; ++first_index) {
-        if (degree[first_index] != 0 && degree[first_index] != 2) {
-            tm_set_pslg_error_detail("invalid loop topology in PSLG: loop vertices must have degree 0 or 2");
-            status = TM_ERR_INVALID_PSLG;
-            goto cleanup;
+    if (require_loop_topology) {
+        for (first_index = 0; first_index < point_count; ++first_index) {
+            if (degree[first_index] != 0 && degree[first_index] != 2) {
+                tm_set_pslg_error_detail("invalid loop topology in PSLG: loop vertices must have degree 0 or 2");
+                status = TM_ERR_INVALID_PSLG;
+                goto cleanup;
+            }
         }
     }
 
 cleanup:
     free(degree);
     return status;
+}
+
+TMStatus tm_validate_segment_graph(
+    const TMPoint *points,
+    size_t point_count,
+    const TMSegment *segments,
+    size_t segment_count
+)
+{
+    return tm_validate_segments(points, point_count, segments, segment_count, 0);
 }
 
 TMStatus tm_read_pslg_file(const char *path, TMPSLG *out_pslg)
@@ -325,7 +376,13 @@ TMStatus tm_read_pslg_file(const char *path, TMPSLG *out_pslg)
     fclose(stream);
 
     tm_initialize();
-    status = tm_validate_segments(out_pslg->points, out_pslg->point_count, out_pslg->segments, out_pslg->segment_count);
+    status = tm_validate_segments(
+        out_pslg->points,
+        out_pslg->point_count,
+        out_pslg->segments,
+        out_pslg->segment_count,
+        1
+    );
     if (status != TM_OK) {
         tm_free_pslg(out_pslg);
         return status;
@@ -350,7 +407,13 @@ TMStatus tm_validate_pslg(const TMPSLG *pslg)
 
     tm_clear_pslg_error_detail();
     tm_initialize();
-    return tm_validate_segments(pslg->points, pslg->point_count, pslg->segments, pslg->segment_count);
+    return tm_validate_segments(
+        pslg->points,
+        pslg->point_count,
+        pslg->segments,
+        pslg->segment_count,
+        1
+    );
 }
 
 void tm_free_pslg(TMPSLG *pslg)

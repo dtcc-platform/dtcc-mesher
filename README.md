@@ -19,7 +19,6 @@ MIT Licensed Two-Dimensional Quality Mesh Generator.
 
 - `.pts` inputs are not refined
 - refinement applies to `.pslg` inputs
-- `max_area` is not implemented
 
 ## Build
 
@@ -70,6 +69,7 @@ Options:
 - `--shell-acute-protection`
 - `--no-acute-protection`
 - `--min-angle deg`
+- `--max-area area`
 - `--protect-angle deg`
 - `--max-refine-steps n`
 - `--max-protection-levels n`
@@ -151,7 +151,12 @@ mesh.write_svg("mesh.svg")
 ```python
 import dtcc_mesher as dm
 
-mesh = dm.generate_file("tests/cases/square_hole_domain.pslg", off_centers=True)
+mesh = dm.generate_file(
+    "tests/cases/square_hole_domain.pslg",
+    min_angle=25.0,
+    max_area=0.5,
+    off_centers=True,
+)
 mesh.write_quality_summary("square_hole.summary.txt")
 mesh.show(title="square_hole_domain")
 ```

@@ -199,6 +199,43 @@ static int test_invalid_geometry_rejected(void)
     return 1;
 }
 
+static int test_negative_max_area_rejected(void)
+{
+    dtcc_mesher_point points[] = {
+        {0.0, 0.0},
+        {1.0, 0.0},
+        {1.0, 1.0},
+        {0.0, 1.0}
+    };
+    dtcc_mesher_domain domain;
+    dtcc_mesher_options options;
+    dtcc_mesher_mesh mesh;
+    dtcc_mesher_error error;
+    dtcc_mesher_status status;
+
+    memset(&mesh, 0, sizeof(mesh));
+    memset(&error, 0, sizeof(error));
+    domain.points = points;
+    domain.num_points = sizeof(points) / sizeof(points[0]);
+    domain.segments = NULL;
+    domain.num_segments = 0;
+    domain.holes = NULL;
+    domain.num_holes = 0;
+
+    dtcc_mesher_options_init(&options);
+    options.max_area = -1.0;
+    status = dtcc_mesher_generate(&domain, &options, &mesh, &error);
+    dtcc_mesher_mesh_free(&mesh);
+
+    if (status != DTCC_MESHER_STATUS_INVALID_ARGUMENT ||
+        strstr(error.message, "max_area must be non-negative") == NULL) {
+        fprintf(stderr, "expected invalid max_area rejection, got %s (%s)\n", dtcc_mesher_status_string(status), error.message);
+        return 0;
+    }
+
+    return 1;
+}
+
 int main(void)
 {
     int ok = 1;
@@ -206,6 +243,7 @@ int main(void)
     ok = test_generate_point_mesh() && ok;
     ok = test_read_generate_and_write_pslg() && ok;
     ok = test_invalid_geometry_rejected() && ok;
+    ok = test_negative_max_area_rejected() && ok;
 
     if (!ok) {
         return 1;

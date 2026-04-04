@@ -47,6 +47,8 @@ typedef enum {
 
 typedef struct {
     double min_angle_deg;
+    double max_area;
+    double max_edge_length;
     int enable_refinement;
     int use_offcenters;
     int verbose;
