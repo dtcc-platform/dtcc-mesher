@@ -11,6 +11,20 @@
 
 #include "dtcc_mesher_api_internal.h"
 
+static const char *dtcc_mesher_internal_error_message(TMStatus status)
+{
+    const char *detail = NULL;
+
+    if (status == TM_ERR_INVALID_PSLG) {
+        detail = tm_last_pslg_error_detail();
+        if (detail != NULL && detail[0] != '\0') {
+            return detail;
+        }
+    }
+
+    return tm_internal_status_string(status);
+}
+
 static void dtcc_mesher_api_init_point(TMPoint *point, double x, double y, int original_index, TMVertexKind kind)
 {
     point->xy[0] = x;
@@ -155,7 +169,7 @@ static dtcc_mesher_status dtcc_mesher_copy_domain_to_pslg(
     if (status != TM_OK) {
         dtcc_mesher_status mapped = dtcc_mesher_api_map_status(status);
         tm_free_pslg(out_pslg);
-        dtcc_mesher_api_set_error(out_error, mapped, "%s", tm_internal_status_string(status));
+        dtcc_mesher_api_set_error(out_error, mapped, "%s", dtcc_mesher_internal_error_message(status));
         return mapped;
     }
 
@@ -452,7 +466,7 @@ dtcc_mesher_status dtcc_mesher_generate(
 
     if (internal_status != TM_OK) {
         status = dtcc_mesher_api_map_status(internal_status);
-        dtcc_mesher_api_set_error(out_error, status, "%s", tm_internal_status_string(internal_status));
+        dtcc_mesher_api_set_error(out_error, status, "%s", dtcc_mesher_internal_error_message(internal_status));
         return status;
     }
 

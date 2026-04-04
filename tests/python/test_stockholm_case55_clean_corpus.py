@@ -28,7 +28,7 @@ def test_stockholm_case55_clean_manifest_metadata():
     assert summary["domain_count"] == 89
     assert summary["ground_domain_count"] == 55
     assert summary["building_domain_count"] == 34
-    assert summary["failing_domain_count"] == 4
+    assert summary["failing_domain_count"] == 3
     assert len(manifest["domains"]) == summary["domain_count"]
 
 

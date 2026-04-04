@@ -10,6 +10,20 @@
 
 static const double dtcc_mesher_api_pi = 3.14159265358979323846;
 
+static const char *dtcc_mesher_internal_error_message(TMStatus status)
+{
+    const char *detail = NULL;
+
+    if (status == TM_ERR_INVALID_PSLG) {
+        detail = tm_last_pslg_error_detail();
+        if (detail != NULL && detail[0] != '\0') {
+            return detail;
+        }
+    }
+
+    return tm_internal_status_string(status);
+}
+
 typedef struct {
     double area;
     double min_angle_deg;
@@ -278,7 +292,7 @@ dtcc_mesher_status dtcc_mesher_read_domain_file(const char *path, dtcc_mesher_do
         internal_status = tm_read_pslg_file(path, &pslg);
         if (internal_status != TM_OK) {
             status = dtcc_mesher_api_map_status(internal_status);
-            dtcc_mesher_api_set_error(out_error, status, "%s", tm_internal_status_string(internal_status));
+            dtcc_mesher_api_set_error(out_error, status, "%s", dtcc_mesher_internal_error_message(internal_status));
             return status;
         }
 
@@ -323,7 +337,7 @@ dtcc_mesher_status dtcc_mesher_read_domain_file(const char *path, dtcc_mesher_do
     internal_status = tm_read_points_file(path, &points, &point_count);
     if (internal_status != TM_OK) {
         status = dtcc_mesher_api_map_status(internal_status);
-        dtcc_mesher_api_set_error(out_error, status, "%s", tm_internal_status_string(internal_status));
+        dtcc_mesher_api_set_error(out_error, status, "%s", dtcc_mesher_internal_error_message(internal_status));
         return status;
     }
 

@@ -5,8 +5,35 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdarg.h>
 
 #include "predicates.h"
+
+static char tm_pslg_error_detail[256];
+
+static void tm_clear_pslg_error_detail(void)
+{
+    tm_pslg_error_detail[0] = '\0';
+}
+
+static void tm_set_pslg_error_detail(const char *format, ...)
+{
+    va_list args;
+
+    if (format == NULL || format[0] == '\0') {
+        tm_clear_pslg_error_detail();
+        return;
+    }
+
+    va_start(args, format);
+    vsnprintf(tm_pslg_error_detail, sizeof(tm_pslg_error_detail), format, args);
+    va_end(args);
+}
+
+const char *tm_last_pslg_error_detail(void)
+{
+    return tm_pslg_error_detail;
+}
 
 static char *tm_next_data_line(FILE *stream, char *buffer, size_t buffer_size)
 {
@@ -97,6 +124,8 @@ static TMStatus tm_validate_segments(const TMPoint *points, size_t point_count, 
     size_t first_index;
     TMStatus status = TM_OK;
 
+    tm_clear_pslg_error_detail();
+
     degree = (size_t *) calloc(point_count, sizeof(*degree));
     if (degree == NULL) {
         return TM_ERR_ALLOC;
@@ -110,11 +139,13 @@ static TMStatus tm_validate_segments(const TMPoint *points, size_t point_count, 
 
         if (first->v[0] < 0 || first->v[1] < 0 ||
             (size_t) first->v[0] >= point_count || (size_t) first->v[1] >= point_count) {
+            tm_set_pslg_error_detail("segment references an out-of-range vertex index");
             status = TM_ERR_INVALID_PSLG;
             goto cleanup;
         }
 
         if (first->v[0] == first->v[1] || tm_point_equals_xy(&points[first->v[0]], points[first->v[1]].xy)) {
+            tm_set_pslg_error_detail("duplicate coordinate / zero-length segment in PSLG");
             status = TM_ERR_INVALID_PSLG;
             goto cleanup;
         }
@@ -129,6 +160,7 @@ static TMStatus tm_validate_segments(const TMPoint *points, size_t point_count, 
 
             if ((first->v[0] == second->v[0] && first->v[1] == second->v[1]) ||
                 (first->v[0] == second->v[1] && first->v[1] == second->v[0])) {
+                tm_set_pslg_error_detail("duplicate segment in PSLG");
                 status = TM_ERR_INVALID_PSLG;
                 goto cleanup;
             }
@@ -154,6 +186,7 @@ static TMStatus tm_validate_segments(const TMPoint *points, size_t point_count, 
                 }
 
                 if (!endpoint_ok) {
+                    tm_set_pslg_error_detail("duplicate coordinate / touching rings across distinct loop vertices");
                     status = TM_ERR_INVALID_PSLG;
                     goto cleanup;
                 }
@@ -162,6 +195,7 @@ static TMStatus tm_validate_segments(const TMPoint *points, size_t point_count, 
             }
 
             if (tm_segments_intersect_closed(a, b, c, d)) {
+                tm_set_pslg_error_detail("intersecting segments in PSLG");
                 status = TM_ERR_INVALID_PSLG;
                 goto cleanup;
             }
@@ -170,6 +204,7 @@ static TMStatus tm_validate_segments(const TMPoint *points, size_t point_count, 
 
     for (first_index = 0; first_index < point_count; ++first_index) {
         if (degree[first_index] != 0 && degree[first_index] != 2) {
+            tm_set_pslg_error_detail("invalid loop topology in PSLG: loop vertices must have degree 0 or 2");
             status = TM_ERR_INVALID_PSLG;
             goto cleanup;
         }
@@ -193,6 +228,7 @@ TMStatus tm_read_pslg_file(const char *path, TMPSLG *out_pslg)
         return TM_ERR_INTERNAL;
     }
 
+    tm_clear_pslg_error_detail();
     memset(out_pslg, 0, sizeof(*out_pslg));
 
     stream = fopen(path, "r");
@@ -312,6 +348,7 @@ TMStatus tm_validate_pslg(const TMPSLG *pslg)
         return TM_ERR_INTERNAL;
     }
 
+    tm_clear_pslg_error_detail();
     tm_initialize();
     return tm_validate_segments(pslg->points, pslg->point_count, pslg->segments, pslg->segment_count);
 }

@@ -16,6 +16,7 @@ typedef struct {
 
 TMStatus tm_read_pslg_file(const char *path, TMPSLG *out_pslg);
 TMStatus tm_validate_pslg(const TMPSLG *pslg);
+const char *tm_last_pslg_error_detail(void);
 void tm_free_pslg(TMPSLG *pslg);
 
 #endif
