@@ -44,7 +44,9 @@ python -m pip install ".[plot]"
 python -m pip install ".[dev]"
 ```
 
-## CLI
+## Native CLI
+
+The native CLI is the C executable built by CMake:
 
 ```sh
 ./build/dtcc_mesher tests/cases/square_center5.pts build/out/square_center5
@@ -65,6 +67,7 @@ Options:
 - `-v`, `--verbose`
 - `--refine`, `--no-refine`
 - `--off-centers`, `--no-off-centers`
+- `--acute-protection`
 - `--simple-acute-protection`
 - `--shell-acute-protection`
 - `--no-acute-protection`
@@ -153,8 +156,9 @@ mesh.write_svg("mesh.svg")
 ```python
 import dtcc_mesher as dm
 
+domain = dm.read_domain("tests/cases/square_hole_domain.pslg")
 mesh = dm.mesh(
-    dm.read_domain("tests/cases/square_hole_domain.pslg"),
+    domain,
     options=dm.MeshingOptions(
         min_angle=25.0,
         max_area=0.5,
@@ -178,17 +182,53 @@ mesh = dm.mesh(
 )
 ```
 
-Primary Python API:
+Public Python API:
 
 - `dm.mesh(...)` is the single entry point for meshing
 - `dm.Domain(...)` and `dm.Domain.from_loops(...)` are for PSLG / point-segment-hole inputs
 - `dm.Coverage(...)` is for polygon coverage inputs with region markers
+- `dm.CoverageGraph(...)` is the low-level coverage graph input when you already have noded segments and region markers
 - `dm.read_domain(...)` reads `.pts` / `.pslg` files into a `Domain`
 - `dm.MeshingOptions(...)` carries the meshing controls
+- `dm.Mesh` carries `points`, `triangles`, `segments`, `summary`, and optional `markers`
+- `dm.plot_mesh(...)`, `dm.plot_mesh_with_summary(...)`, and `dm.show_mesh(...)` are plotting helpers
+
+Recommended usage pattern:
+
+1. Build or read a `Domain` / `Coverage`
+2. Create `MeshingOptions` only when you want non-default controls
+3. Call `mesh(...)`
+
+`MeshingOptions` fields:
+
+- `min_angle`
+- `max_area`
+- `max_edge_length`
+- `refine`
+- `off_centers`
+- `verbose`
+- `acute_protection`
+- `protect_angle`
+- `max_refine_steps`
+- `max_protection_levels`
+
+## Python CLI
+
+The Python package also exposes a lightweight CLI:
 
 ```sh
 python -m dtcc_mesher tests/cases/square_hole_domain.pslg build/out/square_hole_py
 ```
+
+Options:
+
+- `-h`, `--help`
+- `--min-angle deg`
+- `--max-area area`
+- `--max-edge-length length`
+- `--no-refine`
+- `--off-centers`
+- `--acute-protection {none,simple,shell}`
 
 Plotting requires:
 
