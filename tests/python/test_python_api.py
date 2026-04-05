@@ -241,6 +241,36 @@ def test_mesh_coverage_matches_domain_for_large_coordinate_acute_polygon():
     assert set(np.asarray(coverage_mesh.markers, dtype=int)) == {1}
 
 
+def test_mesh_coverage_default_tolerance_merges_city_scale_micro_edges():
+    shapely = pytest.importorskip("shapely.geometry")
+    polygon = shapely.Polygon(
+        [
+            (675000.0, 6580000.0),
+            (675100.0, 6580000.0),
+            (675100.0, 6580100.0),
+            (675000.0001, 6580100.00005),
+            (675000.0, 6580100.0),
+        ]
+    )
+
+    default_graph = dm.Coverage([polygon], [1]).graph(max_edge_length=10.0)
+    exact_graph = dm.Coverage([polygon], [1], tolerance=1e-9).graph(max_edge_length=10.0)
+
+    default_lengths = np.linalg.norm(
+        default_graph.points[default_graph.segments[:, 1]] - default_graph.points[default_graph.segments[:, 0]],
+        axis=1,
+    )
+    exact_lengths = np.linalg.norm(
+        exact_graph.points[exact_graph.segments[:, 1]] - exact_graph.points[exact_graph.segments[:, 0]],
+        axis=1,
+    )
+
+    assert default_graph.segments.shape[0] == 4
+    assert exact_graph.segments.shape[0] == 5
+    assert float(default_lengths.min()) > 1.0
+    assert float(exact_lengths.min()) < 1e-3
+
+
 def test_mesh_coverage_handles_courtyard_region_partition():
     shapely = pytest.importorskip("shapely.geometry")
 
@@ -299,6 +329,79 @@ def test_mesh_graph_reports_t_junctions_in_coverage_input():
             ),
             options=dm.MeshingOptions(refine=False),
         )
+
+
+def test_mesh_graph_handles_stockholm_case15_recovery_regression():
+    with np.load(_case_path("stockholm_case15_graph_maxh10.npz")) as data:
+        graph = dm.CoverageGraph(
+            points=data["points"],
+            segments=data["segments"],
+            region_points=data["region_points"],
+            region_markers=data["region_markers"],
+        )
+
+    mesh = dm.mesh(
+        graph,
+        options=dm.MeshingOptions(min_angle=25.0, max_edge_length=10.0, refine=False),
+    )
+
+    assert mesh.summary.triangle_count > 7000
+    assert mesh.markers is not None
+    assert len(mesh.markers) == mesh.summary.triangle_count
+
+
+def test_mesh_defaults_protect_33_degree_input_corner():
+    length = 10.0
+    angle = np.deg2rad(33.0)
+    mesh = dm.mesh(
+        dm.Domain.from_loops(
+            [
+                (0.0, 0.0),
+                (length, 0.0),
+                (length * np.cos(angle), length * np.sin(angle)),
+                (0.0, 0.0),
+            ]
+        ),
+        options=dm.MeshingOptions(min_angle=25.0, refine=True),
+    )
+
+    assert mesh.summary.protected_corner_count == 1
+    assert mesh.summary.triangle_count > 1
+
+
+def test_mesh_graph_case55_unrestricted_reports_step_limit_cleanly():
+    with np.load(_case_path("stockholm_case55_graph_unrestricted.npz")) as data:
+        graph = dm.CoverageGraph(
+            points=data["points"],
+            segments=data["segments"],
+            region_points=data["region_points"],
+            region_markers=data["region_markers"],
+        )
+
+    with pytest.raises(RuntimeError, match=r"quality refinement reached step limit after 50 steps"):
+        dm.mesh(
+            graph,
+            options=dm.MeshingOptions(min_angle=25.0, refine=True, max_refine_steps=50),
+        )
+
+
+def test_mesh_graph_case55_unrestricted_completes_with_good_quality():
+    with np.load(_case_path("stockholm_case55_graph_unrestricted.npz")) as data:
+        graph = dm.CoverageGraph(
+            points=data["points"],
+            segments=data["segments"],
+            region_points=data["region_points"],
+            region_markers=data["region_markers"],
+        )
+
+    mesh = dm.mesh(
+        graph,
+        options=dm.MeshingOptions(min_angle=25.0, refine=True, max_refine_steps=2000),
+    )
+
+    assert mesh.summary.triangle_count > 4500
+    assert mesh.summary.radius_edge_ratio_max < 1.6
+    assert mesh.summary.count_min_angle_lt_20 <= 2
 
 
 def test_plot_mesh_with_summary_smoke():

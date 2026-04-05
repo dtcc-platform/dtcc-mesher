@@ -27,10 +27,11 @@ def _sanitize_loop(points: object, tol: float = 1e-10) -> np.ndarray:
 
 class _CoverageGraphBuilder:
     def __init__(self, tolerance: float = 1e-9):
+        self._tolerance = float(tolerance)
         self._scale = 1.0 / tolerance
         self._points: list[np.ndarray] = []
         self._segments: list[tuple[int, int]] = []
-        self._point_index: dict[tuple[int, int], int] = {}
+        self._point_index: dict[tuple[int, int], list[int]] = {}
         self._segment_index: set[tuple[int, int]] = set()
 
     def _key(self, point: np.ndarray) -> tuple[int, int]:
@@ -41,13 +42,26 @@ class _CoverageGraphBuilder:
 
     def add_point(self, point: np.ndarray, *, reuse_existing: bool = True) -> int:
         key = self._key(point)
-        if reuse_existing and key in self._point_index:
-            return self._point_index[key]
+        if reuse_existing:
+            best_index = None
+            best_distance = None
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    neighbor_key = (key[0] + dx, key[1] + dy)
+                    for index in self._point_index.get(neighbor_key, []):
+                        distance = float(np.linalg.norm(point - self._points[index]))
+                        if distance > self._tolerance:
+                            continue
+                        if best_distance is None or distance < best_distance:
+                            best_index = index
+                            best_distance = distance
+            if best_index is not None:
+                return best_index
 
         index = len(self._points)
         self._points.append(np.asarray(point, dtype=np.float64))
         if reuse_existing:
-            self._point_index[key] = index
+            self._point_index.setdefault(key, []).append(index)
         return index
 
     def add_segment(self, start: int, end: int) -> None:
@@ -131,17 +145,41 @@ def _polygon_interior_seeds(polygon: object, spacing: float | None) -> list[np.n
     return seeds
 
 
+def _resolve_coverage_tolerance(
+    polygons: Sequence[object],
+    tolerance: float | None,
+) -> float:
+    if tolerance is not None:
+        return float(tolerance)
+
+    bounds = [
+        polygon.bounds
+        for polygon in polygons
+        if polygon is not None and not polygon.is_empty
+    ]
+    if not bounds:
+        return 1e-9
+
+    minx = min(bound[0] for bound in bounds)
+    miny = min(bound[1] for bound in bounds)
+    maxx = max(bound[2] for bound in bounds)
+    maxy = max(bound[3] for bound in bounds)
+    diagonal = math.hypot(maxx - minx, maxy - miny)
+    return min(max(diagonal * 1e-6, 1e-9), 1e-3)
+
+
 def build_coverage_domain(
     polygons: Sequence[object],
     markers: Sequence[int],
     *,
     max_edge_length: float | None = None,
-    tolerance: float = 1e-9,
+    tolerance: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if len(polygons) != len(markers):
         raise ValueError("polygons and markers must have the same length")
 
-    builder = _CoverageGraphBuilder(tolerance=tolerance)
+    resolved_tolerance = _resolve_coverage_tolerance(polygons, tolerance)
+    builder = _CoverageGraphBuilder(tolerance=resolved_tolerance)
     region_points: list[np.ndarray] = []
     region_markers: list[int] = []
     boundary_geometries: list[object] = []
@@ -166,7 +204,7 @@ def build_coverage_domain(
         for line in _iter_lines(noded_boundaries):
             is_closed = (
                 len(line) >= 2
-                and np.linalg.norm(line[0] - line[-1]) <= tolerance
+                and np.linalg.norm(line[0] - line[-1]) <= resolved_tolerance
             )
             clean_line = _sanitize_loop(line, tol=0.0)
             if len(clean_line) < 2:

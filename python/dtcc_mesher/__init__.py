@@ -42,6 +42,14 @@ class MeshingOptions:
 
     ``max_area`` is a lower-level area cap for backends that refine by area.
     Most callers should prefer ``max_edge_length``.
+
+    Refinement uses a standard constrained-Delaunay scheme: encroached
+    constrained segments are split at midpoints and bad triangles are split
+    at circumcenters.
+
+    With ``acute_protection="shell"`` (the default), PSLG corners below
+    60 degrees are protected before refinement unless ``protect_angle`` is
+    set explicitly.
     """
 
     min_angle: float = 20.0
@@ -382,18 +390,18 @@ class CoverageGraph:
 class Coverage:
     polygons: tuple[object, ...]
     markers: tuple[int, ...]
-    tolerance: float = 1e-9
+    tolerance: float | None = None
 
     def __init__(
         self,
         polygons: object,
         markers: object,
         *,
-        tolerance: float = 1e-9,
+        tolerance: float | None = None,
     ) -> None:
         self.polygons = tuple(polygons)
         self.markers = tuple(int(marker) for marker in markers)
-        self.tolerance = float(tolerance)
+        self.tolerance = float(tolerance) if tolerance is not None else None
 
     def graph(self, *, max_edge_length: float | None = None) -> CoverageGraph:
         points, segments, region_points, region_markers = build_coverage_domain(

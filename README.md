@@ -162,7 +162,6 @@ mesh = dm.mesh(
     options=dm.MeshingOptions(
         min_angle=25.0,
         max_edge_length=0.75,
-        off_centers=True,
     ),
 )
 mesh.write_quality_summary("square_hole.summary.txt")
@@ -209,10 +208,13 @@ Recommended usage pattern:
   lower-level area cap for backends that refine by area; most callers should prefer
   `max_edge_length`
 - `refine`
-- `off_centers`
+- `off_centers`:
+  reserved; standard refinement uses circumcenters for bad triangles and midpoint
+  splits for encroached constrained segments
 - `verbose`
 - `acute_protection`
 - `protect_angle`
+  defaults to protecting PSLG corners below `60` degrees when acute protection is enabled
 - `max_refine_steps`
 - `max_protection_levels`
 

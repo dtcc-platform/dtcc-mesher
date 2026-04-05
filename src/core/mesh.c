@@ -27,6 +27,11 @@ typedef struct {
     int b;
 } TMEdgePair;
 
+typedef struct {
+    int triangle_index;
+    int edge;
+} TMFlipCandidate;
+
 static int tm_initialized = 0;
 
 static TMStatus tm_grow_array(void **buffer, size_t *capacity, size_t elem_size, size_t min_capacity)
@@ -405,6 +410,236 @@ static TMStatus tm_append_triangle(TMMesh *mesh, const TMTriangle *triangle)
     mesh->triangles[mesh->triangle_count] = *triangle;
     mesh->triangle_count += 1;
     return TM_OK;
+}
+
+static int tm_find_vertex_in_triangle(const TMTriangle *triangle, int vertex_index)
+{
+    int i;
+
+    for (i = 0; i < 3; ++i) {
+        if (triangle->v[i] == vertex_index) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+static TMStatus tm_append_flip_candidate(
+    TMFlipCandidate **candidates,
+    size_t *count,
+    size_t *capacity,
+    int triangle_index,
+    int edge
+)
+{
+    TMStatus status;
+
+    if (triangle_index < 0 || edge < 0 || edge > 2) {
+        return TM_OK;
+    }
+
+    status = tm_grow_array((void **) candidates, capacity, sizeof(**candidates), *count + 1);
+    if (status != TM_OK) {
+        return status;
+    }
+
+    (*candidates)[*count].triangle_index = triangle_index;
+    (*candidates)[*count].edge = edge;
+    *count += 1;
+    return TM_OK;
+}
+
+static TMStatus tm_legalize_point_star(TMMesh *mesh, int point_index, const int *seed_triangles, size_t seed_count)
+{
+    TMFlipCandidate *candidates = NULL;
+    size_t candidate_count = 0;
+    size_t candidate_capacity = 0;
+    size_t i;
+    TMStatus status = TM_OK;
+
+    for (i = 0; i < seed_count; ++i) {
+        int triangle_index = seed_triangles[i];
+        int edge;
+
+        if (triangle_index < 0 || (size_t) triangle_index >= mesh->triangle_count) {
+            continue;
+        }
+
+        edge = tm_find_vertex_in_triangle(&mesh->triangles[triangle_index], point_index);
+        if (edge < 0) {
+            continue;
+        }
+
+        status = tm_append_flip_candidate(
+            &candidates,
+            &candidate_count,
+            &candidate_capacity,
+            triangle_index,
+            edge
+        );
+        if (status != TM_OK) {
+            free(candidates);
+            return status;
+        }
+    }
+
+    while (candidate_count != 0) {
+        TMFlipCandidate candidate = candidates[candidate_count - 1];
+        int triangle_index = candidate.triangle_index;
+        int edge = candidate.edge;
+        int neighbor_index;
+
+        candidate_count -= 1;
+
+        if (triangle_index < 0 || (size_t) triangle_index >= mesh->triangle_count) {
+            continue;
+        }
+
+        edge = tm_find_vertex_in_triangle(&mesh->triangles[triangle_index], point_index);
+        if (edge < 0) {
+            continue;
+        }
+
+        neighbor_index = mesh->triangles[triangle_index].nbr[edge];
+        if (neighbor_index < 0) {
+            continue;
+        }
+        if (mesh->triangles[triangle_index].constrained[edge]) {
+            continue;
+        }
+        if (tm_edge_is_locally_delaunay(mesh, triangle_index, edge)) {
+            continue;
+        }
+
+        status = tm_flip_edge(mesh, triangle_index, edge);
+        if (status != TM_OK) {
+            free(candidates);
+            return status;
+        }
+
+        status = tm_append_flip_candidate(
+            &candidates,
+            &candidate_count,
+            &candidate_capacity,
+            triangle_index,
+            tm_find_vertex_in_triangle(&mesh->triangles[triangle_index], point_index)
+        );
+        if (status == TM_OK) {
+            status = tm_append_flip_candidate(
+                &candidates,
+                &candidate_count,
+                &candidate_capacity,
+                neighbor_index,
+                tm_find_vertex_in_triangle(&mesh->triangles[neighbor_index], point_index)
+            );
+        }
+        if (status != TM_OK) {
+            free(candidates);
+            return status;
+        }
+    }
+
+    free(candidates);
+    return TM_OK;
+}
+
+static TMStatus tm_set_triangle_edge_neighbor(TMTriangle *triangle, int a, int b, int neighbor)
+{
+    int edge = tm_find_edge_in_triangle(triangle, a, b);
+
+    if (edge < 0) {
+        return TM_ERR_INVALID_MESH;
+    }
+
+    triangle->nbr[edge] = neighbor;
+    return TM_OK;
+}
+
+static TMStatus tm_set_triangle_edge_constraint(TMTriangle *triangle, int a, int b, unsigned char constrained)
+{
+    int edge = tm_find_edge_in_triangle(triangle, a, b);
+
+    if (edge < 0) {
+        return TM_ERR_INVALID_MESH;
+    }
+
+    triangle->constrained[edge] = constrained;
+    return TM_OK;
+}
+
+static TMStatus tm_copy_triangle_edge_state(const TMTriangle *source, int a, int b, TMTriangle *target)
+{
+    int source_edge = tm_find_edge_in_triangle(source, a, b);
+    int target_edge = tm_find_edge_in_triangle(target, a, b);
+
+    if (source_edge < 0 || target_edge < 0) {
+        return TM_ERR_INVALID_MESH;
+    }
+
+    target->nbr[target_edge] = source->nbr[source_edge];
+    target->constrained[target_edge] = source->constrained[source_edge];
+    return TM_OK;
+}
+
+static TMStatus tm_redirect_neighbor_reference(
+    TMMesh *mesh,
+    int triangle_index,
+    int a,
+    int b,
+    int old_neighbor,
+    int new_neighbor
+)
+{
+    int edge;
+
+    if (triangle_index < 0) {
+        return TM_OK;
+    }
+    if ((size_t) triangle_index >= mesh->triangle_count) {
+        return TM_ERR_INVALID_MESH;
+    }
+    if (old_neighbor == new_neighbor) {
+        return TM_OK;
+    }
+
+    edge = tm_find_edge_in_triangle(&mesh->triangles[triangle_index], a, b);
+    if (edge < 0 || mesh->triangles[triangle_index].nbr[edge] != old_neighbor) {
+        return TM_ERR_INVALID_MESH;
+    }
+
+    mesh->triangles[triangle_index].nbr[edge] = new_neighbor;
+    return TM_OK;
+}
+
+static TMStatus tm_link_triangles_across_edge(TMMesh *mesh, int first_index, int second_index, int a, int b)
+{
+    TMStatus status;
+
+    if (first_index < 0 || second_index < 0 ||
+        (size_t) first_index >= mesh->triangle_count ||
+        (size_t) second_index >= mesh->triangle_count) {
+        return TM_ERR_INVALID_MESH;
+    }
+
+    status = tm_set_triangle_edge_neighbor(&mesh->triangles[first_index], a, b, second_index);
+    if (status != TM_OK) {
+        return status;
+    }
+
+    return tm_set_triangle_edge_neighbor(&mesh->triangles[second_index], a, b, first_index);
+}
+
+static void tm_assign_incident_triangle(TMMesh *mesh, int point_index, int triangle_index)
+{
+    if (point_index < 0 || triangle_index < 0) {
+        return;
+    }
+    if ((size_t) point_index >= mesh->point_count || (size_t) triangle_index >= mesh->triangle_count) {
+        return;
+    }
+
+    mesh->points[point_index].incident_triangle = triangle_index;
 }
 
 static void tm_compact_triangles(TMMesh *mesh)
@@ -1231,16 +1466,24 @@ TMStatus tm_locate_point(const TMMesh *mesh, const double point[2], int start_tr
 
 TMStatus tm_flip_edge(TMMesh *mesh, int triangle_index, int edge)
 {
-    TMEdgePair *constraints = NULL;
-    size_t constraint_count = 0;
     TMTriangle first;
     TMTriangle second;
+    TMTriangle triangle;
+    TMTriangle neighbor;
     int neighbor_index;
     int neighbor_edge;
     int a;
     int b;
     int c;
     int d;
+    int neighbor_ca;
+    int neighbor_bc;
+    int neighbor_db;
+    int neighbor_ad;
+    unsigned char constrained_ca;
+    unsigned char constrained_bc;
+    unsigned char constrained_db;
+    unsigned char constrained_ad;
     TMStatus status;
 
     if (mesh == NULL || triangle_index < 0 || (size_t) triangle_index >= mesh->triangle_count || edge < 0 || edge > 2) {
@@ -1276,6 +1519,16 @@ TMStatus tm_flip_edge(TMMesh *mesh, int triangle_index, int edge)
 
     c = mesh->triangles[triangle_index].v[edge];
     d = mesh->triangles[neighbor_index].v[neighbor_edge];
+    triangle = mesh->triangles[triangle_index];
+    neighbor = mesh->triangles[neighbor_index];
+    neighbor_ca = triangle.nbr[tm_find_edge_in_triangle(&triangle, c, a)];
+    neighbor_bc = triangle.nbr[tm_find_edge_in_triangle(&triangle, b, c)];
+    neighbor_db = neighbor.nbr[tm_find_edge_in_triangle(&neighbor, d, b)];
+    neighbor_ad = neighbor.nbr[tm_find_edge_in_triangle(&neighbor, a, d)];
+    constrained_ca = triangle.constrained[tm_find_edge_in_triangle(&triangle, c, a)];
+    constrained_bc = triangle.constrained[tm_find_edge_in_triangle(&triangle, b, c)];
+    constrained_db = neighbor.constrained[tm_find_edge_in_triangle(&neighbor, d, b)];
+    constrained_ad = neighbor.constrained[tm_find_edge_in_triangle(&neighbor, a, d)];
 
     if (tm_orient_value(&mesh->points[c], &mesh->points[a], &mesh->points[d]) <= 0.0 ||
         tm_orient_value(&mesh->points[c], &mesh->points[d], &mesh->points[b]) <= 0.0) {
@@ -1289,22 +1542,6 @@ TMStatus tm_flip_edge(TMMesh *mesh, int triangle_index, int edge)
         return TM_ERR_INTERNAL;
     }
 
-    status = tm_collect_constrained_edge_pairs(mesh, &constraints, &constraint_count);
-    if (status != TM_OK) {
-        return status;
-    }
-
-    status = tm_grow_array(
-        (void **) &mesh->triangles,
-        &mesh->triangle_capacity,
-        sizeof(*mesh->triangles),
-        mesh->triangle_count + 2
-    );
-    if (status != TM_OK) {
-        free(constraints);
-        return status;
-    }
-
     if (!tm_make_triangle(&first, c, a, d, mesh->points) || !tm_make_triangle(&second, c, d, b, mesh->points)) {
         tm_set_pslg_error_detail(
             "flip edge: replacement triangles degenerate for diagonal %d-%d with opposite vertices %d and %d",
@@ -1313,44 +1550,71 @@ TMStatus tm_flip_edge(TMMesh *mesh, int triangle_index, int edge)
             c,
             d
         );
-        free(constraints);
         return TM_ERR_INTERNAL;
     }
 
-    mesh->triangles[triangle_index].dead = 1;
-    mesh->triangles[neighbor_index].dead = 1;
-
-    status = tm_append_triangle(mesh, &first);
+    status = tm_copy_triangle_edge_state(&triangle, c, a, &first);
     if (status == TM_OK) {
-        status = tm_append_triangle(mesh, &second);
+        status = tm_copy_triangle_edge_state(&neighbor, a, d, &first);
+    }
+    if (status == TM_OK) {
+        status = tm_copy_triangle_edge_state(&triangle, b, c, &second);
+    }
+    if (status == TM_OK) {
+        status = tm_copy_triangle_edge_state(&neighbor, d, b, &second);
+    }
+    if (status == TM_OK) {
+        mesh->triangles[triangle_index] = first;
+        mesh->triangles[neighbor_index] = second;
+        status = tm_link_triangles_across_edge(mesh, triangle_index, neighbor_index, c, d);
+    }
+    if (status == TM_OK) {
+        status = tm_set_triangle_edge_constraint(&mesh->triangles[triangle_index], c, a, constrained_ca);
+    }
+    if (status == TM_OK) {
+        status = tm_set_triangle_edge_constraint(&mesh->triangles[triangle_index], a, d, constrained_ad);
+    }
+    if (status == TM_OK) {
+        status = tm_set_triangle_edge_constraint(&mesh->triangles[neighbor_index], b, c, constrained_bc);
+    }
+    if (status == TM_OK) {
+        status = tm_set_triangle_edge_constraint(&mesh->triangles[neighbor_index], d, b, constrained_db);
+    }
+    if (status == TM_OK) {
+        status = tm_set_triangle_edge_neighbor(&mesh->triangles[triangle_index], c, a, neighbor_ca);
+    }
+    if (status == TM_OK) {
+        status = tm_set_triangle_edge_neighbor(&mesh->triangles[triangle_index], a, d, neighbor_ad);
+    }
+    if (status == TM_OK) {
+        status = tm_set_triangle_edge_neighbor(&mesh->triangles[neighbor_index], b, c, neighbor_bc);
+    }
+    if (status == TM_OK) {
+        status = tm_set_triangle_edge_neighbor(&mesh->triangles[neighbor_index], d, b, neighbor_db);
+    }
+    if (status == TM_OK) {
+        status = tm_link_triangles_across_edge(mesh, triangle_index, neighbor_index, c, d);
+    }
+    if (status == TM_OK) {
+        status = tm_redirect_neighbor_reference(mesh, neighbor_bc, b, c, triangle_index, neighbor_index);
+    }
+    if (status == TM_OK) {
+        status = tm_redirect_neighbor_reference(mesh, neighbor_ad, a, d, neighbor_index, triangle_index);
     }
     if (status != TM_OK) {
-        free(constraints);
-        return status;
-    }
-
-    tm_compact_triangles(mesh);
-    status = tm_rebuild_topology(mesh);
-    if (status == TM_OK) {
-        status = tm_apply_constraint_pairs(mesh, constraints, constraint_count);
-        if (status != TM_OK) {
-            tm_set_pslg_error_detail(
-                "flip edge: failed to restore %zu constrained edge pair(s) after flipping %d-%d",
-                constraint_count,
-                a,
-                b
-            );
-        }
-    } else {
         tm_set_pslg_error_detail(
-            "flip edge: topology rebuild failed after flipping diagonal %d-%d",
+            "flip edge: local topology update failed after flipping diagonal %d-%d",
             a,
             b
         );
+        return status;
     }
 
-    free(constraints);
-    return status;
+    tm_assign_incident_triangle(mesh, a, triangle_index);
+    tm_assign_incident_triangle(mesh, b, neighbor_index);
+    tm_assign_incident_triangle(mesh, c, triangle_index);
+    tm_assign_incident_triangle(mesh, d, neighbor_index);
+    return TM_OK;
 }
 
 TMStatus tm_insert_point_in_triangle(
@@ -1361,15 +1625,17 @@ TMStatus tm_insert_point_in_triangle(
     int *out_point_index
 )
 {
-    TMEdgePair *constraints = NULL;
-    size_t constraint_count = 0;
     TMTriangle first;
     TMTriangle second;
     TMTriangle third;
+    TMTriangle triangle;
     int v0;
     int v1;
     int v2;
     int point_index;
+    int second_index;
+    int third_index;
+    int seed_triangles[3];
     TMStatus status;
     int on_edge = -1;
 
@@ -1384,11 +1650,9 @@ TMStatus tm_insert_point_in_triangle(
     v0 = mesh->triangles[triangle_index].v[0];
     v1 = mesh->triangles[triangle_index].v[1];
     v2 = mesh->triangles[triangle_index].v[2];
-
-    status = tm_collect_constrained_edge_pairs(mesh, &constraints, &constraint_count);
-    if (status != TM_OK) {
-        return status;
-    }
+    triangle = mesh->triangles[triangle_index];
+    second_index = (int) mesh->triangle_count;
+    third_index = second_index + 1;
 
     status = tm_grow_array((void **) &mesh->points, &mesh->point_capacity, sizeof(*mesh->points), mesh->point_count + 1);
     if (status == TM_OK) {
@@ -1396,52 +1660,86 @@ TMStatus tm_insert_point_in_triangle(
             (void **) &mesh->triangles,
             &mesh->triangle_capacity,
             sizeof(*mesh->triangles),
-            mesh->triangle_count + 3
+            mesh->triangle_count + 2
         );
     }
     if (status != TM_OK) {
-        free(constraints);
         return status;
     }
 
     status = tm_append_point(mesh, point, -1, kind, &point_index);
     if (status != TM_OK) {
-        free(constraints);
         return status;
     }
 
     if (!tm_make_triangle(&first, v0, v1, point_index, mesh->points) ||
         !tm_make_triangle(&second, v1, v2, point_index, mesh->points) ||
         !tm_make_triangle(&third, v2, v0, point_index, mesh->points)) {
-        free(constraints);
         return TM_ERR_INTERNAL;
     }
 
-    mesh->triangles[triangle_index].dead = 1;
-
-    status = tm_append_triangle(mesh, &first);
+    status = tm_copy_triangle_edge_state(&triangle, v0, v1, &first);
     if (status == TM_OK) {
-        status = tm_append_triangle(mesh, &second);
+        status = tm_copy_triangle_edge_state(&triangle, v1, v2, &second);
     }
     if (status == TM_OK) {
-        status = tm_append_triangle(mesh, &third);
+        status = tm_copy_triangle_edge_state(&triangle, v2, v0, &third);
     }
     if (status != TM_OK) {
-        free(constraints);
         return status;
     }
 
-    tm_compact_triangles(mesh);
-    status = tm_rebuild_topology(mesh);
+    mesh->triangles[triangle_index] = first;
+    mesh->triangles[second_index] = second;
+    mesh->triangles[third_index] = third;
+    mesh->triangle_count += 2;
+
+    status = tm_link_triangles_across_edge(mesh, triangle_index, second_index, v1, point_index);
     if (status == TM_OK) {
-        status = tm_apply_constraint_pairs(mesh, constraints, constraint_count);
+        status = tm_link_triangles_across_edge(mesh, second_index, third_index, v2, point_index);
+    }
+    if (status == TM_OK) {
+        status = tm_link_triangles_across_edge(mesh, third_index, triangle_index, v0, point_index);
+    }
+    if (status == TM_OK) {
+        status = tm_redirect_neighbor_reference(
+            mesh,
+            triangle.nbr[tm_find_edge_in_triangle(&triangle, v1, v2)],
+            v1,
+            v2,
+            triangle_index,
+            second_index
+        );
+    }
+    if (status == TM_OK) {
+        status = tm_redirect_neighbor_reference(
+            mesh,
+            triangle.nbr[tm_find_edge_in_triangle(&triangle, v2, v0)],
+            v2,
+            v0,
+            triangle_index,
+            third_index
+        );
+    }
+    if (status != TM_OK) {
+        return status;
     }
 
-    free(constraints);
-    if (status == TM_OK && out_point_index != NULL) {
+    tm_assign_incident_triangle(mesh, v0, triangle_index);
+    tm_assign_incident_triangle(mesh, v1, triangle_index);
+    tm_assign_incident_triangle(mesh, v2, second_index);
+    tm_assign_incident_triangle(mesh, point_index, triangle_index);
+    seed_triangles[0] = triangle_index;
+    seed_triangles[1] = second_index;
+    seed_triangles[2] = third_index;
+    status = tm_legalize_point_star(mesh, point_index, seed_triangles, 3);
+    if (status != TM_OK) {
+        return status;
+    }
+    if (out_point_index != NULL) {
         *out_point_index = point_index;
     }
-    return status;
+    return TM_OK;
 }
 
 TMStatus tm_insert_point_on_edge(
@@ -1453,13 +1751,12 @@ TMStatus tm_insert_point_on_edge(
     int *out_point_index
 )
 {
-    TMEdgePair *constraints = NULL;
-    size_t constraint_count = 0;
-    size_t constraint_capacity = 0;
     TMTriangle first;
     TMTriangle second;
     TMTriangle third;
     TMTriangle fourth;
+    TMTriangle triangle;
+    TMTriangle neighbor;
     int neighbor_index;
     int neighbor_edge = -1;
     int a;
@@ -1467,6 +1764,11 @@ TMStatus tm_insert_point_on_edge(
     int c;
     int d = -1;
     int point_index;
+    int second_index;
+    int fourth_index = -1;
+    int seed_triangles[4];
+    size_t seed_count = 0;
+    unsigned char split_constrained;
     TMStatus status;
 
     if (mesh == NULL || point == NULL || triangle_index < 0 || (size_t) triangle_index >= mesh->triangle_count || edge < 0 || edge > 2) {
@@ -1506,15 +1808,14 @@ TMStatus tm_insert_point_on_edge(
         }
         d = mesh->triangles[neighbor_index].v[neighbor_edge];
     }
-
-    status = tm_collect_constrained_edge_pairs(mesh, &constraints, &constraint_count);
-    if (status != TM_OK) {
-        return status;
+    triangle = mesh->triangles[triangle_index];
+    if (neighbor_index >= 0) {
+        neighbor = mesh->triangles[neighbor_index];
     }
-    constraint_capacity = constraint_count;
-
-    if (mesh->triangles[triangle_index].constrained[edge]) {
-        tm_remove_edge_pair(constraints, &constraint_count, a, b);
+    split_constrained = mesh->triangles[triangle_index].constrained[edge];
+    second_index = (int) mesh->triangle_count;
+    if (neighbor_index >= 0) {
+        fourth_index = second_index + 1;
     }
 
     status = tm_grow_array((void **) &mesh->points, &mesh->point_capacity, sizeof(*mesh->points), mesh->point_count + 1);
@@ -1523,29 +1824,16 @@ TMStatus tm_insert_point_on_edge(
             (void **) &mesh->triangles,
             &mesh->triangle_capacity,
             sizeof(*mesh->triangles),
-            mesh->triangle_count + ((neighbor_index >= 0) ? 4 : 2)
+            mesh->triangle_count + ((neighbor_index >= 0) ? 2 : 1)
         );
     }
     if (status != TM_OK) {
-        free(constraints);
         return status;
     }
 
     status = tm_append_point(mesh, point, -1, kind, &point_index);
     if (status != TM_OK) {
-        free(constraints);
         return status;
-    }
-
-    if (mesh->triangles[triangle_index].constrained[edge]) {
-        status = tm_append_edge_pair(&constraints, &constraint_count, &constraint_capacity, a, point_index);
-        if (status == TM_OK) {
-            status = tm_append_edge_pair(&constraints, &constraint_count, &constraint_capacity, point_index, b);
-        }
-        if (status != TM_OK) {
-            free(constraints);
-            return status;
-        }
     }
 
     if (!tm_make_triangle(&first, c, a, point_index, mesh->points) ||
@@ -1556,14 +1844,7 @@ TMStatus tm_insert_point_on_edge(
             b,
             point_index
         );
-        free(constraints);
         return TM_ERR_INTERNAL;
-    }
-
-    mesh->triangles[triangle_index].dead = 1;
-    status = tm_append_triangle(mesh, &first);
-    if (status == TM_OK) {
-        status = tm_append_triangle(mesh, &second);
     }
 
     if (neighbor_index >= 0 && status == TM_OK) {
@@ -1575,49 +1856,109 @@ TMStatus tm_insert_point_on_edge(
                 b,
                 point_index
             );
-            free(constraints);
             return TM_ERR_INTERNAL;
         }
-
-        mesh->triangles[neighbor_index].dead = 1;
-        status = tm_append_triangle(mesh, &third);
-        if (status == TM_OK) {
-            status = tm_append_triangle(mesh, &fourth);
-        }
     }
-
     if (status != TM_OK) {
-        free(constraints);
         return status;
     }
 
-    tm_compact_triangles(mesh);
-    status = tm_rebuild_topology(mesh);
+    status = tm_copy_triangle_edge_state(&triangle, c, a, &first);
     if (status == TM_OK) {
-        status = tm_apply_constraint_pairs(mesh, constraints, constraint_count);
-        if (status != TM_OK) {
-            tm_set_pslg_error_detail(
-                "insert point on edge: failed to restore %zu constrained edge pair(s) after splitting %d-%d at point %d",
-                constraint_count,
-                a,
-                b,
-                point_index
-            );
-        }
-    } else {
+        status = tm_copy_triangle_edge_state(&triangle, b, c, &second);
+    }
+    if (neighbor_index >= 0 && status == TM_OK) {
+        status = tm_copy_triangle_edge_state(&neighbor, d, b, &third);
+    }
+    if (neighbor_index >= 0 && status == TM_OK) {
+        status = tm_copy_triangle_edge_state(&neighbor, a, d, &fourth);
+    }
+    if (status != TM_OK) {
+        return status;
+    }
+
+    mesh->triangles[triangle_index] = first;
+    mesh->triangles[second_index] = second;
+    mesh->triangle_count += 1;
+    if (neighbor_index >= 0) {
+        mesh->triangles[neighbor_index] = third;
+        mesh->triangles[fourth_index] = fourth;
+        mesh->triangle_count += 1;
+    }
+
+    status = tm_link_triangles_across_edge(mesh, triangle_index, second_index, c, point_index);
+    if (neighbor_index >= 0 && status == TM_OK) {
+        status = tm_link_triangles_across_edge(mesh, neighbor_index, fourth_index, d, point_index);
+    }
+    if (neighbor_index >= 0 && status == TM_OK) {
+        status = tm_link_triangles_across_edge(mesh, triangle_index, fourth_index, a, point_index);
+    }
+    if (neighbor_index >= 0 && status == TM_OK) {
+        status = tm_link_triangles_across_edge(mesh, second_index, neighbor_index, point_index, b);
+    }
+    if (status == TM_OK) {
+        status = tm_redirect_neighbor_reference(
+            mesh,
+            triangle.nbr[tm_find_edge_in_triangle(&triangle, b, c)],
+            b,
+            c,
+            triangle_index,
+            second_index
+        );
+    }
+    if (neighbor_index >= 0 && status == TM_OK) {
+        status = tm_redirect_neighbor_reference(
+            mesh,
+            neighbor.nbr[tm_find_edge_in_triangle(&neighbor, a, d)],
+            a,
+            d,
+            neighbor_index,
+            fourth_index
+        );
+    }
+    if (status == TM_OK && split_constrained) {
+        status = tm_set_triangle_edge_constraint(&mesh->triangles[triangle_index], a, point_index, 1);
+    }
+    if (status == TM_OK && split_constrained) {
+        status = tm_set_triangle_edge_constraint(&mesh->triangles[second_index], point_index, b, 1);
+    }
+    if (neighbor_index >= 0 && status == TM_OK && split_constrained) {
+        status = tm_set_triangle_edge_constraint(&mesh->triangles[neighbor_index], point_index, b, 1);
+    }
+    if (neighbor_index >= 0 && status == TM_OK && split_constrained) {
+        status = tm_set_triangle_edge_constraint(&mesh->triangles[fourth_index], a, point_index, 1);
+    }
+    if (status != TM_OK) {
         tm_set_pslg_error_detail(
-            "insert point on edge: topology rebuild failed after splitting %d-%d at point %d",
+            "insert point on edge: local topology update failed after splitting %d-%d at point %d",
             a,
             b,
             point_index
         );
+        return status;
     }
 
-    free(constraints);
-    if (status == TM_OK && out_point_index != NULL) {
+    tm_assign_incident_triangle(mesh, a, triangle_index);
+    tm_assign_incident_triangle(mesh, b, second_index);
+    tm_assign_incident_triangle(mesh, c, triangle_index);
+    if (neighbor_index >= 0) {
+        tm_assign_incident_triangle(mesh, d, neighbor_index);
+    }
+    tm_assign_incident_triangle(mesh, point_index, triangle_index);
+    seed_triangles[seed_count++] = triangle_index;
+    seed_triangles[seed_count++] = second_index;
+    if (neighbor_index >= 0) {
+        seed_triangles[seed_count++] = neighbor_index;
+        seed_triangles[seed_count++] = fourth_index;
+    }
+    status = tm_legalize_point_star(mesh, point_index, seed_triangles, seed_count);
+    if (status != TM_OK) {
+        return status;
+    }
+    if (out_point_index != NULL) {
         *out_point_index = point_index;
     }
-    return status;
+    return TM_OK;
 }
 
 void tm_free_points(TMPoint *points)

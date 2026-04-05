@@ -7,11 +7,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include <float.h>
+#include <time.h>
 
 #include "predicates.h"
+#include "validate.h"
 
 static const double tm_pi = 3.14159265358979323846;
 static const double tm_default_min_angle_deg = 20.0;
+static const double tm_default_protection_angle_deg = 60.0;
+
+typedef struct {
+    size_t segment_index;
+    int point_index;
+} TMEncroachmentCandidate;
+
+typedef struct {
+    size_t triangle_index;
+} TMBadTriangleCandidate;
 
 static int tm_find_live_segment_index(const TMMesh *mesh, int a, int b, size_t *out_segment_index);
 static TMStatus tm_recover_segment(TMMesh *mesh, int a, int b, const TMBuildOptions *options);
@@ -29,8 +41,16 @@ static TMStatus tm_split_recovery_segment(
     int b,
     const TMBuildOptions *options
 );
-static TMStatus tm_update_after_local_edit(TMMesh *mesh, const TMBuildOptions *options);
 static TMStatus tm_restore_constrained_delaunay(TMMesh *mesh, const TMBuildOptions *options);
+static int tm_evaluate_triangle_refinement_need(
+    const TMMesh *mesh,
+    size_t triangle_index,
+    double beta,
+    double max_area,
+    double *out_ratio,
+    double *out_area,
+    int *out_quality_violation
+);
 
 static void tm_verbose_log(const TMBuildOptions *options, const char *format, ...)
 {
@@ -56,11 +76,6 @@ static int tm_refinement_enabled(const TMBuildOptions *options)
     return options != NULL && options->refine;
 }
 
-static int tm_use_offcenters(const TMBuildOptions *options)
-{
-    return options != NULL && options->use_offcenters;
-}
-
 static int tm_protect_acute_corners(const TMBuildOptions *options)
 {
     return options == NULL || options->protect_acute_corners;
@@ -78,6 +93,11 @@ static TMAcuteProtectionMode tm_acute_mode(const TMBuildOptions *options)
 static const char *tm_acute_mode_name(const TMBuildOptions *options)
 {
     return tm_acute_mode(options) == TM_ACUTE_MODE_SIMPLE ? "simple" : "shell";
+}
+
+static double tm_elapsed_seconds(clock_t start, clock_t end)
+{
+    return (double) (end - start) / (double) CLOCKS_PER_SEC;
 }
 
 static double tm_quality_min_angle_deg(const TMBuildOptions *options)
@@ -104,7 +124,7 @@ static double tm_protection_angle_deg(const TMBuildOptions *options)
         return options->protect_angle_deg;
     }
 
-    return tm_quality_min_angle_deg(options);
+    return tm_default_protection_angle_deg;
 }
 
 static size_t tm_refinement_step_limit(const TMBuildOptions *options, const TMMesh *mesh)
@@ -680,6 +700,600 @@ static int tm_point_encroaches_segment(const double point[2], const double a[2],
     return dot < -tolerance;
 }
 
+static TMStatus tm_grow_encroachment_candidates(
+    TMEncroachmentCandidate **candidates,
+    size_t *capacity,
+    size_t min_capacity
+)
+{
+    TMEncroachmentCandidate *grown;
+    size_t new_capacity;
+
+    if (*capacity >= min_capacity) {
+        return TM_OK;
+    }
+
+    new_capacity = (*capacity == 0) ? 16 : *capacity;
+    while (new_capacity < min_capacity) {
+        if (new_capacity > ((size_t) -1) / 2) {
+            return TM_ERR_ALLOC;
+        }
+        new_capacity *= 2;
+    }
+
+    grown = (TMEncroachmentCandidate *) realloc(*candidates, new_capacity * sizeof(*grown));
+    if (grown == NULL) {
+        return TM_ERR_ALLOC;
+    }
+
+    *candidates = grown;
+    *capacity = new_capacity;
+    return TM_OK;
+}
+
+static TMStatus tm_append_encroachment_candidate(
+    TMEncroachmentCandidate **candidates,
+    size_t *count,
+    size_t *capacity,
+    size_t segment_index,
+    int point_index
+)
+{
+    TMStatus status = tm_grow_encroachment_candidates(candidates, capacity, *count + 1);
+
+    if (status != TM_OK) {
+        return status;
+    }
+
+    (*candidates)[*count].segment_index = segment_index;
+    (*candidates)[*count].point_index = point_index;
+    *count += 1;
+    return TM_OK;
+}
+
+static TMStatus tm_grow_bad_triangle_flags(
+    unsigned char **queued_flags,
+    size_t *capacity,
+    size_t min_capacity
+)
+{
+    unsigned char *new_flags;
+    size_t old_capacity;
+    size_t new_capacity;
+
+    if (*capacity >= min_capacity) {
+        return TM_OK;
+    }
+
+    old_capacity = *capacity;
+    new_capacity = (*capacity == 0) ? 32u : *capacity;
+    while (new_capacity < min_capacity) {
+        if (new_capacity > SIZE_MAX / 2u) {
+            return TM_ERR_ALLOC;
+        }
+        new_capacity *= 2u;
+    }
+
+    new_flags = (unsigned char *) realloc(*queued_flags, new_capacity * sizeof(*new_flags));
+    if (new_flags == NULL) {
+        return TM_ERR_ALLOC;
+    }
+
+    memset(new_flags + old_capacity, 0, (new_capacity - old_capacity) * sizeof(*new_flags));
+    *queued_flags = new_flags;
+    *capacity = new_capacity;
+    return TM_OK;
+}
+
+static TMStatus tm_grow_bad_triangle_candidates(
+    TMBadTriangleCandidate **candidates,
+    size_t *capacity,
+    size_t min_capacity
+)
+{
+    TMBadTriangleCandidate *new_candidates;
+    size_t new_capacity;
+
+    if (*capacity >= min_capacity) {
+        return TM_OK;
+    }
+
+    new_capacity = (*capacity == 0) ? 32u : *capacity;
+    while (new_capacity < min_capacity) {
+        if (new_capacity > SIZE_MAX / 2u) {
+            return TM_ERR_ALLOC;
+        }
+        new_capacity *= 2u;
+    }
+
+    new_candidates = (TMBadTriangleCandidate *) realloc(*candidates, new_capacity * sizeof(*new_candidates));
+    if (new_candidates == NULL) {
+        return TM_ERR_ALLOC;
+    }
+
+    *candidates = new_candidates;
+    *capacity = new_capacity;
+    return TM_OK;
+}
+
+static TMStatus tm_append_bad_triangle_candidate(
+    TMBadTriangleCandidate **candidates,
+    size_t *count,
+    size_t *capacity,
+    unsigned char **queued_flags,
+    size_t *queued_flag_capacity,
+    size_t triangle_index
+)
+{
+    TMStatus status;
+
+    status = tm_grow_bad_triangle_flags(queued_flags, queued_flag_capacity, triangle_index + 1);
+    if (status != TM_OK) {
+        return status;
+    }
+    if ((*queued_flags)[triangle_index]) {
+        return TM_OK;
+    }
+
+    status = tm_grow_bad_triangle_candidates(candidates, capacity, *count + 1);
+
+    if (status != TM_OK) {
+        return status;
+    }
+
+    (*candidates)[*count].triangle_index = triangle_index;
+    (*queued_flags)[triangle_index] = 1;
+    *count += 1;
+    return TM_OK;
+}
+
+static int tm_find_triangle_vertex_index(const TMTriangle *triangle, int vertex_index)
+{
+    int slot;
+
+    for (slot = 0; slot < 3; ++slot) {
+        if (triangle->v[slot] == vertex_index) {
+            return slot;
+        }
+    }
+
+    return -1;
+}
+
+static TMStatus tm_maybe_enqueue_bad_triangle_candidate(
+    const TMMesh *mesh,
+    size_t triangle_index,
+    double beta,
+    double max_area,
+    TMBadTriangleCandidate **candidates,
+    size_t *count,
+    size_t *capacity,
+    unsigned char **queued_flags,
+    size_t *queued_flag_capacity
+)
+{
+    if (!tm_evaluate_triangle_refinement_need(mesh, triangle_index, beta, max_area, NULL, NULL, NULL)) {
+        return TM_OK;
+    }
+
+    return tm_append_bad_triangle_candidate(
+        candidates,
+        count,
+        capacity,
+        queued_flags,
+        queued_flag_capacity,
+        triangle_index
+    );
+}
+
+static TMStatus tm_seed_bad_triangle_candidates(
+    const TMMesh *mesh,
+    double beta,
+    double max_area,
+    TMBadTriangleCandidate **candidates,
+    size_t *count,
+    size_t *capacity,
+    unsigned char **queued_flags,
+    size_t *queued_flag_capacity
+)
+{
+    size_t triangle_index;
+
+    for (triangle_index = 0; triangle_index < mesh->triangle_count; ++triangle_index) {
+        TMStatus status = tm_maybe_enqueue_bad_triangle_candidate(
+            mesh,
+            triangle_index,
+            beta,
+            max_area,
+            candidates,
+            count,
+            capacity,
+            queued_flags,
+            queued_flag_capacity
+        );
+
+        if (status != TM_OK) {
+            return status;
+        }
+    }
+
+    return TM_OK;
+}
+
+static TMStatus tm_enqueue_bad_triangles_along_point_fan(
+    const TMMesh *mesh,
+    int point_index,
+    int triangle_index,
+    int previous_triangle,
+    int stop_triangle,
+    double beta,
+    double max_area,
+    TMBadTriangleCandidate **candidates,
+    size_t *count,
+    size_t *capacity,
+    unsigned char **queued_flags,
+    size_t *queued_flag_capacity
+)
+{
+    while (triangle_index >= 0) {
+        const TMTriangle *triangle;
+        int vertex_slot;
+        int next_triangle;
+        TMStatus status;
+
+        if ((size_t) triangle_index >= mesh->triangle_count) {
+            return TM_ERR_INVALID_MESH;
+        }
+
+        triangle = &mesh->triangles[triangle_index];
+        vertex_slot = tm_find_triangle_vertex_index(triangle, point_index);
+        if (vertex_slot < 0) {
+            return TM_ERR_INVALID_MESH;
+        }
+
+        status = tm_maybe_enqueue_bad_triangle_candidate(
+            mesh,
+            (size_t) triangle_index,
+            beta,
+            max_area,
+            candidates,
+            count,
+            capacity,
+            queued_flags,
+            queued_flag_capacity
+        );
+        if (status != TM_OK) {
+            return status;
+        }
+
+        if (triangle->nbr[(vertex_slot + 1) % 3] == previous_triangle) {
+            next_triangle = triangle->nbr[(vertex_slot + 2) % 3];
+        } else if (triangle->nbr[(vertex_slot + 2) % 3] == previous_triangle) {
+            next_triangle = triangle->nbr[(vertex_slot + 1) % 3];
+        } else {
+            return TM_ERR_INVALID_MESH;
+        }
+
+        if (next_triangle < 0 || next_triangle == stop_triangle) {
+            return TM_OK;
+        }
+
+        previous_triangle = triangle_index;
+        triangle_index = next_triangle;
+    }
+
+    return TM_OK;
+}
+
+static TMStatus tm_enqueue_bad_triangles_for_point(
+    const TMMesh *mesh,
+    int point_index,
+    double beta,
+    double max_area,
+    TMBadTriangleCandidate **candidates,
+    size_t *count,
+    size_t *capacity,
+    unsigned char **queued_flags,
+    size_t *queued_flag_capacity
+)
+{
+    int start_triangle;
+    const TMTriangle *triangle;
+    int vertex_slot;
+    int first_neighbor;
+    int second_neighbor;
+    TMStatus status;
+
+    if (point_index < 0 || (size_t) point_index >= mesh->point_count) {
+        return TM_OK;
+    }
+    if (mesh->points[point_index].incident_triangle < 0 ||
+        (size_t) mesh->points[point_index].incident_triangle >= mesh->triangle_count) {
+        return TM_ERR_INVALID_MESH;
+    }
+
+    start_triangle = mesh->points[point_index].incident_triangle;
+    triangle = &mesh->triangles[start_triangle];
+    vertex_slot = tm_find_triangle_vertex_index(triangle, point_index);
+    if (vertex_slot < 0) {
+        return TM_ERR_INVALID_MESH;
+    }
+
+    status = tm_maybe_enqueue_bad_triangle_candidate(
+        mesh,
+        (size_t) start_triangle,
+        beta,
+        max_area,
+        candidates,
+        count,
+        capacity,
+        queued_flags,
+        queued_flag_capacity
+    );
+    if (status != TM_OK) {
+        return status;
+    }
+
+    first_neighbor = triangle->nbr[(vertex_slot + 1) % 3];
+    second_neighbor = triangle->nbr[(vertex_slot + 2) % 3];
+
+    status = tm_enqueue_bad_triangles_along_point_fan(
+        mesh,
+        point_index,
+        first_neighbor,
+        start_triangle,
+        start_triangle,
+        beta,
+        max_area,
+        candidates,
+        count,
+        capacity,
+        queued_flags,
+        queued_flag_capacity
+    );
+    if (status != TM_OK) {
+        return status;
+    }
+
+    if (second_neighbor == first_neighbor) {
+        return TM_OK;
+    }
+
+    return tm_enqueue_bad_triangles_along_point_fan(
+        mesh,
+        point_index,
+        second_neighbor,
+        start_triangle,
+        start_triangle,
+        beta,
+        max_area,
+        candidates,
+        count,
+        capacity,
+        queued_flags,
+        queued_flag_capacity
+    );
+}
+
+static int tm_point_encroaches_live_segment(const TMMesh *mesh, size_t segment_index, int point_index)
+{
+    const TMSegment *segment;
+
+    if (segment_index >= mesh->segment_count ||
+        point_index < 0 ||
+        (size_t) point_index >= mesh->point_count) {
+        return 0;
+    }
+
+    segment = &mesh->segments[segment_index];
+    if (!segment->live || segment->is_protected) {
+        return 0;
+    }
+    if (point_index == segment->v[0] || point_index == segment->v[1]) {
+        return 0;
+    }
+    if (mesh->points[point_index].incident_triangle < 0) {
+        return 0;
+    }
+
+    return tm_point_encroaches_segment(
+        mesh->points[point_index].xy,
+        mesh->points[segment->v[0]].xy,
+        mesh->points[segment->v[1]].xy,
+        tm_segment_length_squared(mesh, segment->v[0], segment->v[1])
+    );
+}
+
+static TMStatus tm_enqueue_segment_encroachments_for_point(
+    const TMMesh *mesh,
+    int point_index,
+    TMEncroachmentCandidate **candidates,
+    size_t *count,
+    size_t *capacity
+)
+{
+    size_t segment_index;
+
+    if (point_index < 0 || (size_t) point_index >= mesh->point_count) {
+        return TM_OK;
+    }
+    if (mesh->points[point_index].incident_triangle < 0) {
+        return TM_OK;
+    }
+
+    for (segment_index = 0; segment_index < mesh->segment_count; ++segment_index) {
+        TMStatus status;
+
+        if (!tm_point_encroaches_live_segment(mesh, segment_index, point_index)) {
+            continue;
+        }
+
+        status = tm_append_encroachment_candidate(
+            candidates,
+            count,
+            capacity,
+            segment_index,
+            point_index
+        );
+        if (status != TM_OK) {
+            return status;
+        }
+    }
+
+    return TM_OK;
+}
+
+static TMStatus tm_enqueue_point_encroachments_for_segment(
+    const TMMesh *mesh,
+    size_t segment_index,
+    TMEncroachmentCandidate **candidates,
+    size_t *count,
+    size_t *capacity
+)
+{
+    size_t point_index;
+
+    if (segment_index >= mesh->segment_count) {
+        return TM_OK;
+    }
+    if (!mesh->segments[segment_index].live || mesh->segments[segment_index].is_protected) {
+        return TM_OK;
+    }
+
+    for (point_index = 0; point_index < mesh->point_count; ++point_index) {
+        TMStatus status;
+
+        if (!tm_point_encroaches_live_segment(mesh, segment_index, (int) point_index)) {
+            continue;
+        }
+
+        status = tm_append_encroachment_candidate(
+            candidates,
+            count,
+            capacity,
+            segment_index,
+            (int) point_index
+        );
+        if (status != TM_OK) {
+            return status;
+        }
+    }
+
+    return TM_OK;
+}
+
+static TMStatus tm_seed_encroachment_candidates(
+    const TMMesh *mesh,
+    TMEncroachmentCandidate **candidates,
+    size_t *count,
+    size_t *capacity
+)
+{
+    size_t segment_index;
+
+    for (segment_index = 0; segment_index < mesh->segment_count; ++segment_index) {
+        TMStatus status = tm_enqueue_point_encroachments_for_segment(
+            mesh,
+            segment_index,
+            candidates,
+            count,
+            capacity
+        );
+
+        if (status != TM_OK) {
+            return status;
+        }
+    }
+
+    return TM_OK;
+}
+
+static int tm_pop_encroachment_candidate(
+    const TMMesh *mesh,
+    TMEncroachmentCandidate *candidates,
+    size_t *count,
+    size_t *out_segment_index,
+    int *out_point_index
+)
+{
+    while (*count > 0) {
+        TMEncroachmentCandidate candidate = candidates[*count - 1];
+
+        *count -= 1;
+        if (!tm_point_encroaches_live_segment(mesh, candidate.segment_index, candidate.point_index)) {
+            continue;
+        }
+
+        if (out_segment_index != NULL) {
+            *out_segment_index = candidate.segment_index;
+        }
+        if (out_point_index != NULL) {
+            *out_point_index = candidate.point_index;
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+static TMStatus tm_enqueue_encroachments_after_segment_split(
+    const TMMesh *mesh,
+    int a,
+    int b,
+    int point_index,
+    TMEncroachmentCandidate **candidates,
+    size_t *count,
+    size_t *capacity
+)
+{
+    size_t left_segment_index;
+    size_t right_segment_index;
+    TMStatus status;
+
+    if (point_index < 0) {
+        return TM_OK;
+    }
+
+    status = tm_enqueue_segment_encroachments_for_point(
+        mesh,
+        point_index,
+        candidates,
+        count,
+        capacity
+    );
+    if (status != TM_OK) {
+        return status;
+    }
+
+    if (tm_find_live_segment_index(mesh, a, point_index, &left_segment_index)) {
+        status = tm_enqueue_point_encroachments_for_segment(
+            mesh,
+            left_segment_index,
+            candidates,
+            count,
+            capacity
+        );
+        if (status != TM_OK) {
+            return status;
+        }
+    }
+
+    if (tm_find_live_segment_index(mesh, point_index, b, &right_segment_index)) {
+        status = tm_enqueue_point_encroachments_for_segment(
+            mesh,
+            right_segment_index,
+            candidates,
+            count,
+            capacity
+        );
+        if (status != TM_OK) {
+            return status;
+        }
+    }
+
+    return TM_OK;
+}
+
 static TMStatus tm_grow_segments(TMMesh *mesh, size_t min_capacity)
 {
     TMSegment *segments;
@@ -813,34 +1427,76 @@ static int tm_find_live_segment_index(const TMMesh *mesh, int a, int b, size_t *
     return 0;
 }
 
-static TMStatus tm_split_segment_registry(TMMesh *mesh, size_t segment_index, int point_index)
-{
-    TMSegment segment = mesh->segments[segment_index];
-    TMStatus status;
-    size_t first_new_index;
-    size_t second_new_index;
-
-    mesh->segments[segment_index].live = 0;
-
-    first_new_index = mesh->segment_count;
-    status = tm_append_live_segment(mesh, segment.v[0], point_index, segment.original_index);
-    if (status == TM_OK) {
-        mesh->segments[first_new_index].is_protected = segment.is_protected;
-        mesh->segments[first_new_index].protected_apex = segment.protected_apex;
-        second_new_index = mesh->segment_count;
-        status = tm_append_live_segment(mesh, point_index, segment.v[1], segment.original_index);
-        if (status == TM_OK) {
-            mesh->segments[second_new_index].is_protected = segment.is_protected;
-            mesh->segments[second_new_index].protected_apex = segment.protected_apex;
-        }
-    }
-    return status;
-}
-
 static void tm_copy_segment_flags(TMSegment *destination, const TMSegment *source)
 {
     destination->is_protected = source->is_protected;
     destination->protected_apex = source->protected_apex;
+}
+
+static void tm_merge_segment_flags(TMSegment *destination, const TMSegment *source)
+{
+    if (source == NULL || !source->is_protected) {
+        return;
+    }
+
+    destination->is_protected = 1;
+    if (destination->protected_apex < 0) {
+        destination->protected_apex = source->protected_apex;
+    }
+}
+
+static TMStatus tm_append_live_segment_unique(
+    TMMesh *mesh,
+    int a,
+    int b,
+    int original_index,
+    const TMSegment *source_flags
+)
+{
+    size_t segment_index;
+    TMStatus status;
+
+    if (a == b) {
+        return TM_OK;
+    }
+
+    if (tm_find_live_segment_index(mesh, a, b, &segment_index)) {
+        tm_merge_segment_flags(&mesh->segments[segment_index], source_flags);
+        return TM_OK;
+    }
+
+    segment_index = mesh->segment_count;
+    status = tm_append_live_segment(mesh, a, b, original_index);
+    if (status == TM_OK && source_flags != NULL) {
+        tm_copy_segment_flags(&mesh->segments[segment_index], source_flags);
+    }
+    return status;
+}
+
+static TMStatus tm_split_segment_registry(TMMesh *mesh, size_t segment_index, int point_index)
+{
+    TMSegment segment = mesh->segments[segment_index];
+    TMStatus status;
+
+    mesh->segments[segment_index].live = 0;
+
+    status = tm_append_live_segment_unique(
+        mesh,
+        segment.v[0],
+        point_index,
+        segment.original_index,
+        &segment
+    );
+    if (status == TM_OK) {
+        status = tm_append_live_segment_unique(
+            mesh,
+            point_index,
+            segment.v[1],
+            segment.original_index,
+            &segment
+        );
+    }
+    return status;
 }
 
 static TMStatus tm_copy_live_segments_with_split(
@@ -864,29 +1520,40 @@ static TMStatus tm_copy_live_segments_with_split(
         }
 
         if (matches_target) {
-            size_t first_index = target->segment_count;
-            TMStatus status = tm_append_live_segment(target, a, point_index, segment->original_index);
+            TMStatus status = tm_append_live_segment_unique(
+                target,
+                a,
+                point_index,
+                segment->original_index,
+                segment
+            );
             if (status != TM_OK) {
                 return status;
             }
-            tm_copy_segment_flags(&target->segments[first_index], segment);
-
-            first_index = target->segment_count;
-            status = tm_append_live_segment(target, point_index, b, segment->original_index);
+            status = tm_append_live_segment_unique(
+                target,
+                point_index,
+                b,
+                segment->original_index,
+                segment
+            );
             if (status != TM_OK) {
                 return status;
             }
-            tm_copy_segment_flags(&target->segments[first_index], segment);
             continue;
         }
 
         {
-            size_t new_index = target->segment_count;
-            TMStatus status = tm_append_live_segment(target, segment->v[0], segment->v[1], segment->original_index);
+            TMStatus status = tm_append_live_segment_unique(
+                target,
+                segment->v[0],
+                segment->v[1],
+                segment->original_index,
+                segment
+            );
             if (status != TM_OK) {
                 return status;
             }
-            tm_copy_segment_flags(&target->segments[new_index], segment);
         }
     }
 
@@ -1021,60 +1688,6 @@ static TMStatus tm_triangle_circumcenter(const TMMesh *mesh, int triangle_index,
     return TM_OK;
 }
 
-static int tm_triangle_offcenter_candidate(
-    const TMMesh *mesh,
-    int triangle_index,
-    double min_angle_deg,
-    const double circumcenter[2],
-    double out_point[2]
-)
-{
-    int a;
-    int b;
-    int apex;
-    double length_sq;
-    double length;
-    double midpoint[2];
-    double normal[2];
-    double to_apex[2];
-    double off_distance;
-    double off_distance_sq;
-    double circumcenter_distance_sq;
-    double tangent;
-
-    if (tm_triangle_shortest_edge(mesh, triangle_index, NULL, &a, &b, &apex, &length_sq) != TM_OK) {
-        return 0;
-    }
-
-    length = sqrt(length_sq);
-    tangent = tan(min_angle_deg * tm_pi / 360.0);
-    if (length <= 0.0 || tangent <= 0.0) {
-        return 0;
-    }
-
-    midpoint[0] = 0.5 * (mesh->points[a].xy[0] + mesh->points[b].xy[0]);
-    midpoint[1] = 0.5 * (mesh->points[a].xy[1] + mesh->points[b].xy[1]);
-    normal[0] = -(mesh->points[b].xy[1] - mesh->points[a].xy[1]) / length;
-    normal[1] = (mesh->points[b].xy[0] - mesh->points[a].xy[0]) / length;
-    to_apex[0] = mesh->points[apex].xy[0] - midpoint[0];
-    to_apex[1] = mesh->points[apex].xy[1] - midpoint[1];
-    if (normal[0] * to_apex[0] + normal[1] * to_apex[1] < 0.0) {
-        normal[0] = -normal[0];
-        normal[1] = -normal[1];
-    }
-
-    off_distance = length / (2.0 * tangent);
-    off_distance_sq = off_distance * off_distance;
-    circumcenter_distance_sq = tm_distance_squared(midpoint, circumcenter);
-    if (off_distance_sq > circumcenter_distance_sq * (1.0 + 1e-12)) {
-        return 0;
-    }
-
-    out_point[0] = midpoint[0] + normal[0] * off_distance;
-    out_point[1] = midpoint[1] + normal[1] * off_distance;
-    return 1;
-}
-
 static int tm_point_inside_or_on_triangle(const TMMesh *mesh, int triangle_index, const double point[2], int *out_edge)
 {
     const TMTriangle *triangle = &mesh->triangles[triangle_index];
@@ -1106,57 +1719,6 @@ static int tm_point_inside_or_on_triangle(const TMMesh *mesh, int triangle_index
         *out_edge = on_edge;
     }
     return 1;
-}
-
-static int tm_find_encroached_segment(const TMMesh *mesh, size_t *out_segment_index, int *out_point_index)
-{
-    size_t segment_index;
-    int found = 0;
-    double best_length_sq = 0.0;
-
-    for (segment_index = 0; segment_index < mesh->segment_count; ++segment_index) {
-        const TMSegment *segment = &mesh->segments[segment_index];
-        const double *a;
-        const double *b;
-        double length_sq;
-        size_t point_index;
-
-        if (!segment->live) {
-            continue;
-        }
-        if (segment->is_protected) {
-            continue;
-        }
-
-        a = mesh->points[segment->v[0]].xy;
-        b = mesh->points[segment->v[1]].xy;
-        length_sq = tm_segment_length_squared(mesh, segment->v[0], segment->v[1]);
-
-        for (point_index = 0; point_index < mesh->point_count; ++point_index) {
-            if ((int) point_index == segment->v[0] || (int) point_index == segment->v[1]) {
-                continue;
-            }
-            if (mesh->points[point_index].incident_triangle < 0) {
-                continue;
-            }
-
-            if (tm_point_encroaches_segment(mesh->points[point_index].xy, a, b, length_sq)) {
-                if (!found ||
-                    length_sq < best_length_sq ||
-                    (length_sq == best_length_sq && segment_index < *out_segment_index)) {
-                    found = 1;
-                    best_length_sq = length_sq;
-                    *out_segment_index = segment_index;
-                    if (out_point_index != NULL) {
-                        *out_point_index = (int) point_index;
-                    }
-                }
-                break;
-            }
-        }
-    }
-
-    return found;
 }
 
 static int tm_find_encroached_segment_for_point(const TMMesh *mesh, const double point[2], size_t *out_segment_index)
@@ -1284,6 +1846,103 @@ static int tm_find_bad_triangle(
     if (out_ratio != NULL) {
         *out_ratio = best_ratio;
     }
+    return 0;
+}
+
+static int tm_evaluate_triangle_refinement_need(
+    const TMMesh *mesh,
+    size_t triangle_index,
+    double beta,
+    double max_area,
+    double *out_ratio,
+    double *out_area,
+    int *out_quality_violation
+)
+{
+    double ratio;
+    int quality_exempt;
+
+    if (triangle_index >= mesh->triangle_count) {
+        return 0;
+    }
+
+    ratio = tm_triangle_radius_edge_ratio(mesh, (int) triangle_index);
+    quality_exempt = tm_local_triangle_is_exempt_from_quality(mesh, (int) triangle_index);
+
+    if (!quality_exempt && ratio > beta * (1.0 + 1e-12)) {
+        if (out_ratio != NULL) {
+            *out_ratio = ratio;
+        }
+        if (out_area != NULL) {
+            *out_area = tm_triangle_area(mesh, (int) triangle_index);
+        }
+        if (out_quality_violation != NULL) {
+            *out_quality_violation = 1;
+        }
+        return 1;
+    }
+
+    if (max_area > 0.0 && !quality_exempt) {
+        double area = tm_triangle_area(mesh, (int) triangle_index);
+
+        if (area > max_area * (1.0 + 1e-12)) {
+            if (out_ratio != NULL) {
+                *out_ratio = ratio;
+            }
+            if (out_area != NULL) {
+                *out_area = area;
+            }
+            if (out_quality_violation != NULL) {
+                *out_quality_violation = 0;
+            }
+            return 1;
+        }
+    }
+
+    if (out_ratio != NULL) {
+        *out_ratio = ratio;
+    }
+    if (out_area != NULL) {
+        *out_area = tm_triangle_area(mesh, (int) triangle_index);
+    }
+    return 0;
+}
+
+static int tm_pop_bad_triangle_candidate(
+    const TMMesh *mesh,
+    TMBadTriangleCandidate *candidates,
+    size_t *count,
+    unsigned char *queued_flags,
+    size_t queued_flag_capacity,
+    double beta,
+    double max_area,
+    size_t *out_triangle_index,
+    double *out_ratio,
+    double *out_area,
+    int *out_quality_violation
+)
+{
+    while (*count != 0) {
+        TMBadTriangleCandidate candidate = candidates[*count - 1];
+
+        *count -= 1;
+        if (candidate.triangle_index < queued_flag_capacity) {
+            queued_flags[candidate.triangle_index] = 0;
+        }
+        if (tm_evaluate_triangle_refinement_need(
+                mesh,
+                candidate.triangle_index,
+                beta,
+                max_area,
+                out_ratio,
+                out_area,
+                out_quality_violation
+            )) {
+            *out_triangle_index = candidate.triangle_index;
+            return 1;
+        }
+    }
+
     return 0;
 }
 
@@ -1429,6 +2088,7 @@ static TMStatus tm_split_recovery_segment(
     double split_point[2];
     int blocker_index = -1;
     double blocker_distance = 0.0;
+    int use_existing_point = 0;
     int point_index;
     size_t rebuild_point_count;
     TMStatus status;
@@ -1449,22 +2109,25 @@ static TMStatus tm_split_recovery_segment(
     }
 
     memset(&rebuilt, 0, sizeof(rebuilt));
-    rebuild_point_count = mesh->point_count + 1u;
+    use_existing_point = blocker_index >= 0;
+    point_index = use_existing_point ? blocker_index : (int) mesh->point_count;
+    rebuild_point_count = mesh->point_count + (use_existing_point ? 0u : 1u);
     input_points = (TMPoint *) calloc(rebuild_point_count, sizeof(*input_points));
     if (input_points == NULL) {
         return TM_ERR_ALLOC;
     }
 
     memcpy(input_points, mesh->points, mesh->point_count * sizeof(*input_points));
-    point_index = (int) mesh->point_count;
-    input_points[point_index].xy[0] = split_point[0];
-    input_points[point_index].xy[1] = split_point[1];
-    input_points[point_index].original_index = point_index;
-    input_points[point_index].kind = TM_VERTEX_SEGMENT_SPLIT;
-    input_points[point_index].incident_triangle = -1;
-    input_points[point_index].protection_apex = -1;
-    input_points[point_index].protection_side = TM_PROTECTION_SIDE_NONE;
-    input_points[point_index].protection_level = 0;
+    if (!use_existing_point) {
+        input_points[point_index].xy[0] = split_point[0];
+        input_points[point_index].xy[1] = split_point[1];
+        input_points[point_index].original_index = point_index;
+        input_points[point_index].kind = TM_VERTEX_SEGMENT_SPLIT;
+        input_points[point_index].incident_triangle = -1;
+        input_points[point_index].protection_apex = -1;
+        input_points[point_index].protection_side = TM_PROTECTION_SIDE_NONE;
+        input_points[point_index].protection_level = 0;
+    }
 
     status = tm_build_mesh(input_points, rebuild_point_count, &rebuilt);
     if (status == TM_OK) {
@@ -1587,13 +2250,24 @@ static TMStatus tm_restore_constrained_delaunay(TMMesh *mesh, const TMBuildOptio
                     status = tm_flip_edge(mesh, (int) tri_index, edge);
                     if (status != TM_OK) {
                         detail = tm_last_pslg_error_detail();
-                        tm_set_pslg_error_detail(
-                            "restore constrained Delaunay failed at triangle %zu edge %d%s%s",
-                            tri_index,
-                            edge,
-                            (detail != NULL && detail[0] != '\0') ? ": " : "",
-                            (detail != NULL) ? detail : ""
-                        );
+                        {
+                            TMValidationReport report;
+                            TMStatus validation_status = tm_validate_mesh(mesh, 0, &report);
+
+                            tm_set_pslg_error_detail(
+                                "restore constrained Delaunay failed at triangle %zu edge %d%s%s (validation status=%d adjacency=%zu orientation=%zu duplicates=%zu incident=%zu constrained=%zu)",
+                                tri_index,
+                                edge,
+                                (detail != NULL && detail[0] != '\0') ? ": " : "",
+                                (detail != NULL) ? detail : "",
+                                (int) validation_status,
+                                report.adjacency_errors,
+                                report.orientation_errors,
+                                report.duplicate_triangle_errors,
+                                report.incident_triangle_errors,
+                                report.constrained_edge_errors
+                            );
+                        }
                         return status;
                     }
                     changed = 1;
@@ -1608,17 +2282,6 @@ static TMStatus tm_restore_constrained_delaunay(TMMesh *mesh, const TMBuildOptio
     }
 
     return TM_OK;
-}
-
-static TMStatus tm_update_after_local_edit(TMMesh *mesh, const TMBuildOptions *options)
-{
-    TMStatus status = tm_mark_all_constraints(mesh);
-
-    if (status != TM_OK) {
-        return status;
-    }
-
-    return tm_restore_constrained_delaunay(mesh, options);
 }
 
 static TMStatus tm_split_segment_with_point(
@@ -1636,6 +2299,8 @@ static TMStatus tm_split_segment_with_point(
     int point_index = -1;
     TMStatus status;
     const char *detail;
+
+    (void) options;
 
     if (!tm_mesh_has_edge(mesh, segment->v[0], segment->v[1], &triangle_index, &edge)) {
         tm_set_pslg_error_detail(
@@ -1667,19 +2332,6 @@ static TMStatus tm_split_segment_with_point(
             segment->v[0],
             segment->v[1],
             point_index
-        );
-        return status;
-    }
-
-    status = tm_update_after_local_edit(mesh, options);
-    if (status != TM_OK) {
-        detail = tm_last_pslg_error_detail();
-        tm_set_pslg_error_detail(
-            "split segment %d-%d failed during local update%s%s",
-            segment->v[0],
-            segment->v[1],
-            (detail != NULL && detail[0] != '\0') ? ": " : "",
-            (detail != NULL) ? detail : ""
         );
         return status;
     }
@@ -2042,7 +2694,7 @@ static TMStatus tm_insert_triangle_split_point(
         return status;
     }
 
-    return tm_update_after_local_edit(mesh, options);
+    return TM_OK;
 }
 
 static TMStatus tm_refine_quality_mesh(TMMesh *mesh, const TMBuildOptions *options)
@@ -2050,30 +2702,76 @@ static TMStatus tm_refine_quality_mesh(TMMesh *mesh, const TMBuildOptions *optio
     double min_angle_deg = tm_quality_min_angle_deg(options);
     double max_area = tm_area_limit(options);
     double beta = tm_quality_beta(min_angle_deg);
+    TMEncroachmentCandidate *encroachment_candidates = NULL;
+    TMBadTriangleCandidate *bad_triangle_candidates = NULL;
+    unsigned char *bad_triangle_queued = NULL;
+    size_t encroachment_count = 0;
+    size_t encroachment_capacity = 0;
+    size_t bad_triangle_count = 0;
+    size_t bad_triangle_capacity = 0;
+    size_t bad_triangle_queued_capacity = 0;
     size_t step_limit = tm_refinement_step_limit(options, mesh);
     size_t steps = 0;
     size_t segment_splits = 0;
     size_t triangle_splits = 0;
+    double seed_time = 0.0;
+    double pop_time = 0.0;
+    double bad_triangle_time = 0.0;
+    double split_time = 0.0;
+    double enqueue_time = 0.0;
+    double circumcenter_time = 0.0;
+    double triangle_insert_time = 0.0;
+    TMStatus status;
+
+    tm_clear_pslg_error_detail();
 
     if (max_area > 0.0) {
         tm_verbose_log(
             options,
-            "quality refinement: target min angle %.2f deg (beta=%.6f), max area=%.6f, step limit=%zu, mode=%s",
+            "quality refinement: target min angle %.2f deg (beta=%.6f), max area=%.6f, step limit=%zu, mode=circumcenters",
             min_angle_deg,
             beta,
             max_area,
-            step_limit,
-            tm_use_offcenters(options) ? "off-centers" : "circumcenters"
+            step_limit
         );
     } else {
         tm_verbose_log(
             options,
-            "quality refinement: target min angle %.2f deg (beta=%.6f), max area=off, step limit=%zu, mode=%s",
+            "quality refinement: target min angle %.2f deg (beta=%.6f), max area=off, step limit=%zu, mode=circumcenters",
             min_angle_deg,
             beta,
-            step_limit,
-            tm_use_offcenters(options) ? "off-centers" : "circumcenters"
+            step_limit
         );
+    }
+
+    {
+        clock_t start = clock();
+
+        status = tm_seed_encroachment_candidates(
+            mesh,
+            &encroachment_candidates,
+            &encroachment_count,
+            &encroachment_capacity
+        );
+        if (status == TM_OK) {
+            status = tm_seed_bad_triangle_candidates(
+                mesh,
+                beta,
+                max_area,
+                &bad_triangle_candidates,
+                &bad_triangle_count,
+                &bad_triangle_capacity,
+                &bad_triangle_queued,
+                &bad_triangle_queued_capacity
+            );
+        }
+        seed_time += tm_elapsed_seconds(start, clock());
+    }
+    if (status != TM_OK) {
+        free(bad_triangle_queued);
+        free(bad_triangle_candidates);
+        free(encroachment_candidates);
+        return status;
     }
 
     while (steps < step_limit) {
@@ -2083,117 +2781,162 @@ static TMStatus tm_refine_quality_mesh(TMMesh *mesh, const TMBuildOptions *optio
         double ratio;
         double area;
         int quality_violation = 0;
-        TMStatus status;
 
-        if (tm_find_encroached_segment(mesh, &segment_index, &encroaching_point)) {
-            const TMSegment *segment = &mesh->segments[segment_index];
-
-            tm_verbose_log(
-                options,
-                "refine step %zu: split encroached segment %d-%d due to point %d",
-                steps + 1,
-                segment->v[0],
-                segment->v[1],
-                encroaching_point
+        {
+            clock_t start = clock();
+            int have_encroached_segment = tm_pop_encroachment_candidate(
+                mesh,
+                encroachment_candidates,
+                &encroachment_count,
+                &segment_index,
+                &encroaching_point
             );
-            status = tm_split_segment_midpoint(mesh, segment_index, options, NULL);
-            if (status != TM_OK) {
-                return status;
+
+            pop_time += tm_elapsed_seconds(start, clock());
+
+            if (have_encroached_segment) {
+                const TMSegment *segment = &mesh->segments[segment_index];
+                int a = segment->v[0];
+                int b = segment->v[1];
+                int split_point_index = -1;
+
+                tm_verbose_log(
+                    options,
+                    "refine step %zu: split encroached segment %d-%d due to point %d",
+                    steps + 1,
+                    segment->v[0],
+                    segment->v[1],
+                    encroaching_point
+                );
+                start = clock();
+                status = tm_split_segment_midpoint(mesh, segment_index, options, &split_point_index);
+                split_time += tm_elapsed_seconds(start, clock());
+                if (status != TM_OK) {
+                    free(bad_triangle_queued);
+                    free(bad_triangle_candidates);
+                    free(encroachment_candidates);
+                    return status;
+                }
+                start = clock();
+                status = tm_enqueue_encroachments_after_segment_split(
+                    mesh,
+                    a,
+                    b,
+                    split_point_index,
+                    &encroachment_candidates,
+                    &encroachment_count,
+                    &encroachment_capacity
+                );
+                enqueue_time += tm_elapsed_seconds(start, clock());
+                if (status != TM_OK) {
+                    free(bad_triangle_queued);
+                    free(bad_triangle_candidates);
+                    free(encroachment_candidates);
+                    return status;
+                }
+                start = clock();
+                status = tm_enqueue_bad_triangles_for_point(
+                    mesh,
+                    split_point_index,
+                    beta,
+                    max_area,
+                    &bad_triangle_candidates,
+                    &bad_triangle_count,
+                    &bad_triangle_capacity,
+                    &bad_triangle_queued,
+                    &bad_triangle_queued_capacity
+                );
+                enqueue_time += tm_elapsed_seconds(start, clock());
+                if (status != TM_OK) {
+                    free(bad_triangle_queued);
+                    free(bad_triangle_candidates);
+                    free(encroachment_candidates);
+                    return status;
+                }
+                segment_splits += 1;
+                steps += 1;
+                continue;
             }
-            segment_splits += 1;
-            steps += 1;
-            continue;
         }
 
-        if (!tm_find_bad_triangle(
+        {
+            clock_t start = clock();
+            int found_bad_triangle = tm_pop_bad_triangle_candidate(
                 mesh,
+                bad_triangle_candidates,
+                &bad_triangle_count,
+                bad_triangle_queued,
+                bad_triangle_queued_capacity,
                 beta,
                 max_area,
-                tm_use_offcenters(options),
                 &triangle_index,
                 &ratio,
                 &area,
                 &quality_violation
-            )) {
-            tm_verbose_log(
-                options,
-                "quality refinement complete: %zu steps, %zu segment splits, %zu triangle splits",
-                steps,
-                segment_splits,
-                triangle_splits
             );
-            return TM_OK;
+
+            bad_triangle_time += tm_elapsed_seconds(start, clock());
+
+            if (!found_bad_triangle) {
+                tm_verbose_log(
+                    options,
+                    "quality refinement complete: %zu steps, %zu segment splits, %zu triangle splits",
+                    steps,
+                    segment_splits,
+                    triangle_splits
+                );
+                if (options != NULL && options->verbose) {
+                    tm_verbose_log(
+                        options,
+                        "quality refinement timings: seed=%.3fs pop=%.3fs bad=%.3fs split=%.3fs enqueue=%.3fs circumcenter=%.3fs triangle_insert=%.3fs",
+                        seed_time,
+                        pop_time,
+                        bad_triangle_time,
+                        split_time,
+                        enqueue_time,
+                        circumcenter_time,
+                        triangle_insert_time
+                    );
+                }
+                free(bad_triangle_queued);
+                free(bad_triangle_candidates);
+                free(encroachment_candidates);
+                return TM_OK;
+            }
         }
 
         {
             double circumcenter[2];
-            double offcenter[2];
-            double candidate[2];
-            const char *candidate_name = "circumcenter";
             size_t circumcenter_segment_index = 0;
-            size_t offcenter_segment_index = 0;
-            size_t candidate_segment_index = 0;
             size_t split_segment_index = 0;
             int circumcenter_encroaches = 0;
-            int candidate_encroaches = 0;
-            int offcenter_available = 0;
-            int offcenter_encroaches = 0;
             int split_segment = 0;
-            int use_offcenter = quality_violation && tm_use_offcenters(options);
+            int point_index = -1;
 
-            status = tm_triangle_circumcenter(mesh, (int) triangle_index, circumcenter);
+            {
+                clock_t start = clock();
+
+                status = tm_triangle_circumcenter(mesh, (int) triangle_index, circumcenter);
+                circumcenter_time += tm_elapsed_seconds(start, clock());
+            }
             if (status != TM_OK) {
+                free(bad_triangle_queued);
+                free(bad_triangle_candidates);
+                free(encroachment_candidates);
                 return status;
             }
 
             circumcenter_encroaches = tm_find_encroached_segment_for_point(mesh, circumcenter, &circumcenter_segment_index);
-            candidate[0] = circumcenter[0];
-            candidate[1] = circumcenter[1];
-            candidate_encroaches = circumcenter_encroaches;
-            candidate_segment_index = circumcenter_segment_index;
-
-            if (use_offcenter) {
-                offcenter_available = tm_triangle_offcenter_candidate(
-                    mesh,
-                    (int) triangle_index,
-                    min_angle_deg,
-                    circumcenter,
-                    offcenter
-                );
-                if (offcenter_available) {
-                    offcenter_encroaches = tm_find_encroached_segment_for_point(mesh, offcenter, &offcenter_segment_index);
-                    if (!offcenter_encroaches) {
-                        candidate[0] = offcenter[0];
-                        candidate[1] = offcenter[1];
-                        candidate_name = "off-center";
-                        candidate_encroaches = 0;
-                    } else if (circumcenter_encroaches) {
-                        double offcenter_length_sq = tm_segment_length_squared(
-                            mesh,
-                            mesh->segments[offcenter_segment_index].v[0],
-                            mesh->segments[offcenter_segment_index].v[1]
-                        );
-                        double circumcenter_length_sq = tm_segment_length_squared(
-                            mesh,
-                            mesh->segments[circumcenter_segment_index].v[0],
-                            mesh->segments[circumcenter_segment_index].v[1]
-                        );
-
-                        split_segment = 1;
-                        split_segment_index = (offcenter_length_sq < circumcenter_length_sq) ?
-                            offcenter_segment_index :
-                            circumcenter_segment_index;
-                    }
-                }
-            }
-
-            if (!split_segment && candidate_encroaches) {
+            if (circumcenter_encroaches) {
                 split_segment = 1;
-                split_segment_index = candidate_segment_index;
+                split_segment_index = circumcenter_segment_index;
             }
 
             if (split_segment) {
                 const TMSegment *segment = &mesh->segments[split_segment_index];
+                int a = segment->v[0];
+                int b = segment->v[1];
+                int split_point_index = -1;
 
                 tm_verbose_log(
                     options,
@@ -2207,8 +2950,71 @@ static TMStatus tm_refine_quality_mesh(TMMesh *mesh, const TMBuildOptions *optio
                     segment->v[0],
                     segment->v[1]
                 );
-                status = tm_split_segment_midpoint(mesh, split_segment_index, options, NULL);
+                {
+                    clock_t start = clock();
+
+                    status = tm_split_segment_midpoint(mesh, split_segment_index, options, &split_point_index);
+                    split_time += tm_elapsed_seconds(start, clock());
+                }
                 if (status != TM_OK) {
+                    free(bad_triangle_queued);
+                    free(bad_triangle_candidates);
+                    free(encroachment_candidates);
+                    return status;
+                }
+                {
+                    clock_t start = clock();
+
+                    status = tm_enqueue_encroachments_after_segment_split(
+                        mesh,
+                        a,
+                        b,
+                        split_point_index,
+                        &encroachment_candidates,
+                        &encroachment_count,
+                        &encroachment_capacity
+                    );
+                    enqueue_time += tm_elapsed_seconds(start, clock());
+                }
+                if (status != TM_OK) {
+                    free(bad_triangle_queued);
+                    free(bad_triangle_candidates);
+                    free(encroachment_candidates);
+                    return status;
+                }
+                {
+                    clock_t start = clock();
+
+                    status = tm_enqueue_bad_triangles_for_point(
+                        mesh,
+                        split_point_index,
+                        beta,
+                        max_area,
+                        &bad_triangle_candidates,
+                        &bad_triangle_count,
+                        &bad_triangle_capacity,
+                        &bad_triangle_queued,
+                        &bad_triangle_queued_capacity
+                    );
+                    if (status == TM_OK) {
+                        status = tm_maybe_enqueue_bad_triangle_candidate(
+                            mesh,
+                            triangle_index,
+                            beta,
+                            max_area,
+                            &bad_triangle_candidates,
+                            &bad_triangle_count,
+                            &bad_triangle_capacity,
+                            &bad_triangle_queued,
+                            &bad_triangle_queued_capacity
+                        );
+                    }
+                    enqueue_time += tm_elapsed_seconds(start, clock());
+                }
+                if (status != TM_OK) {
+                    free(bad_triangle_queued);
+                    free(bad_triangle_candidates);
+                    free(encroachment_candidates);
                     return status;
                 }
                 segment_splits += 1;
@@ -2219,23 +3025,131 @@ static TMStatus tm_refine_quality_mesh(TMMesh *mesh, const TMBuildOptions *optio
             tm_verbose_log(
                 options,
                 quality_violation ?
-                    "refine step %zu: split bad triangle %zu at %s (R/s=%.6f, area=%.6f)" :
-                    "refine step %zu: split oversized triangle %zu at %s (area=%.6f, R/s=%.6f)",
+                    "refine step %zu: split bad triangle %zu at circumcenter (R/s=%.6f, area=%.6f)" :
+                    "refine step %zu: split oversized triangle %zu at circumcenter (area=%.6f, R/s=%.6f)",
                 steps + 1,
                 triangle_index,
-                candidate_name,
                 quality_violation ? ratio : area,
                 quality_violation ? area : ratio
             );
-            status = tm_insert_triangle_split_point(mesh, (int) triangle_index, candidate, options, NULL);
+            {
+                clock_t start = clock();
+
+                status = tm_insert_triangle_split_point(
+                    mesh,
+                    (int) triangle_index,
+                    circumcenter,
+                    options,
+                    &point_index
+                );
+                triangle_insert_time += tm_elapsed_seconds(start, clock());
+            }
             if (status != TM_OK) {
+                free(bad_triangle_queued);
+                free(bad_triangle_candidates);
+                free(encroachment_candidates);
                 return status;
+            }
+            {
+                clock_t start = clock();
+
+                status = tm_enqueue_segment_encroachments_for_point(
+                    mesh,
+                    point_index,
+                    &encroachment_candidates,
+                    &encroachment_count,
+                    &encroachment_capacity
+                );
+                if (status == TM_OK) {
+                    status = tm_enqueue_bad_triangles_for_point(
+                        mesh,
+                        point_index,
+                        beta,
+                        max_area,
+                        &bad_triangle_candidates,
+                        &bad_triangle_count,
+                        &bad_triangle_capacity,
+                        &bad_triangle_queued,
+                        &bad_triangle_queued_capacity
+                    );
+                }
+                enqueue_time += tm_elapsed_seconds(start, clock());
+            }
+            if (status != TM_OK) {
+                free(bad_triangle_queued);
+                free(bad_triangle_candidates);
+                free(encroachment_candidates);
+                return status;
+            }
+            if (point_index >= 0 && mesh->points[point_index].kind == TM_VERTEX_SEGMENT_SPLIT) {
+                size_t incident_segments[2];
+
+                if (tm_find_live_incident_segments(mesh, point_index, incident_segments)) {
+                    {
+                        clock_t start = clock();
+
+                        status = tm_enqueue_point_encroachments_for_segment(
+                            mesh,
+                            incident_segments[0],
+                            &encroachment_candidates,
+                            &encroachment_count,
+                            &encroachment_capacity
+                        );
+                        enqueue_time += tm_elapsed_seconds(start, clock());
+                    }
+                    if (status != TM_OK) {
+                        free(bad_triangle_queued);
+                        free(bad_triangle_candidates);
+                        free(encroachment_candidates);
+                        return status;
+                    }
+                    {
+                        clock_t start = clock();
+
+                        status = tm_enqueue_point_encroachments_for_segment(
+                            mesh,
+                            incident_segments[1],
+                            &encroachment_candidates,
+                            &encroachment_count,
+                            &encroachment_capacity
+                        );
+                        enqueue_time += tm_elapsed_seconds(start, clock());
+                    }
+                    if (status != TM_OK) {
+                        free(bad_triangle_queued);
+                        free(bad_triangle_candidates);
+                        free(encroachment_candidates);
+                        return status;
+                    }
+                }
             }
             triangle_splits += 1;
             steps += 1;
         }
     }
 
+    free(bad_triangle_queued);
+    free(bad_triangle_candidates);
+    free(encroachment_candidates);
+    if (options != NULL && options->verbose) {
+        tm_verbose_log(
+            options,
+            "quality refinement timings: seed=%.3fs pop=%.3fs bad=%.3fs split=%.3fs enqueue=%.3fs circumcenter=%.3fs triangle_insert=%.3fs",
+            seed_time,
+            pop_time,
+            bad_triangle_time,
+            split_time,
+            enqueue_time,
+            circumcenter_time,
+            triangle_insert_time
+        );
+    }
+    tm_set_pslg_error_detail(
+        "quality refinement reached step limit after %zu steps (%zu segment splits, %zu triangle splits)",
+        steps,
+        segment_splits,
+        triangle_splits
+    );
     return TM_ERR_INTERNAL;
 }
 
@@ -2473,6 +3387,7 @@ TMStatus tm_build_pslg_mesh(const TMPSLG *pslg, const TMBuildOptions *options, T
         return TM_ERR_INTERNAL;
     }
 
+    tm_clear_pslg_error_detail();
     memset(&working_pslg, 0, sizeof(working_pslg));
     tm_verbose_log(options, "read PSLG: %zu vertices, %zu segments, %zu hole markers", pslg->point_count, pslg->segment_count, pslg->hole_count);
 
@@ -2613,6 +3528,7 @@ TMStatus tm_build_coverage_mesh(
         return TM_ERR_INVALID_PSLG;
     }
 
+    tm_clear_pslg_error_detail();
     *out_triangle_markers = NULL;
     memset(&working_pslg, 0, sizeof(working_pslg));
     tm_verbose_log(
