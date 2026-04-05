@@ -32,6 +32,18 @@ __version__ = "0.1.0"
 
 @dataclass(slots=True)
 class MeshingOptions:
+    """Meshing controls for :func:`mesh`.
+
+    ``max_edge_length`` is the preferred public size control for 2D city
+    meshing. It represents the maximum target constrained-edge length and
+    nominal mesh spacing in the input plane. Use ``None`` to leave the mesh
+    globally unrestricted and let geometry plus ``min_angle`` drive
+    refinement.
+
+    ``max_area`` is a lower-level area cap for backends that refine by area.
+    Most callers should prefer ``max_edge_length``.
+    """
+
     min_angle: float = 20.0
     max_area: float | None = None
     max_edge_length: float | None = None

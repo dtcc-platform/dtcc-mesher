@@ -215,6 +215,32 @@ def test_mesh_coverage_preserves_closed_outer_boundary_sampling():
     assert max(aspect_ratios) < 20.0
 
 
+def test_mesh_coverage_matches_domain_for_large_coordinate_acute_polygon():
+    shapely = pytest.importorskip("shapely.geometry")
+    polygon = shapely.Polygon(
+        [
+            (675000.0, 6581000.0),
+            (675020.0, 6581000.0),
+            (675001.0, 6581004.0),
+            (675000.0, 6581020.0),
+            (675000.0, 6581000.0),
+        ]
+    )
+
+    coverage_mesh = dm.mesh(
+        dm.Coverage([polygon], markers=[1]),
+        options=dm.MeshingOptions(min_angle=25.0, refine=True, max_refine_steps=5000),
+    )
+    domain_mesh = dm.mesh(
+        dm.Domain.from_loops(polygon.exterior.coords),
+        options=dm.MeshingOptions(min_angle=25.0, refine=True, max_refine_steps=5000),
+    )
+
+    assert coverage_mesh.triangles.shape[0] == domain_mesh.triangles.shape[0]
+    assert coverage_mesh.markers is not None
+    assert set(np.asarray(coverage_mesh.markers, dtype=int)) == {1}
+
+
 def test_mesh_coverage_handles_courtyard_region_partition():
     shapely = pytest.importorskip("shapely.geometry")
 

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <float.h>
 
 #include "predicates.h"
 
@@ -145,17 +146,29 @@ static int tm_point_nearly_on_segment_xy(const double a[2], const double b[2], c
     double dx = b[0] - a[0];
     double dy = b[1] - a[1];
     double len_sq = dx * dx + dy * dy;
-    double cross = dx * (point[1] - a[1]) - dy * (point[0] - a[0]);
-    double dot = (point[0] - a[0]) * (point[0] - b[0]) +
-                 (point[1] - a[1]) * (point[1] - b[1]);
+    double scale;
     double tolerance;
+    double t;
+    double projection[2];
+    double distance_sq;
 
     if (len_sq == 0.0) {
         return 0;
     }
 
-    tolerance = 1e-12 * ((len_sq > 1.0) ? len_sq : 1.0);
-    return fabs(cross) <= tolerance && dot <= tolerance;
+    scale = fabs(a[0]) + fabs(a[1]) + fabs(b[0]) + fabs(b[1]) + fabs(point[0]) + fabs(point[1]);
+    tolerance = 64.0 * DBL_EPSILON * ((scale > 1.0) ? scale : 1.0);
+
+    t = ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / len_sq;
+    if (t < -tolerance || t > 1.0 + tolerance) {
+        return 0;
+    }
+
+    projection[0] = a[0] + t * dx;
+    projection[1] = a[1] + t * dy;
+    distance_sq = (point[0] - projection[0]) * (point[0] - projection[0]) +
+                  (point[1] - projection[1]) * (point[1] - projection[1]);
+    return distance_sq <= tolerance * tolerance;
 }
 
 static int tm_mesh_has_edge(const TMMesh *mesh, int a, int b, int *out_triangle, int *out_edge)
@@ -1436,26 +1449,22 @@ static TMStatus tm_split_recovery_segment(
     }
 
     memset(&rebuilt, 0, sizeof(rebuilt));
-    rebuild_point_count = mesh->point_count + (blocker_index >= 0 ? 0u : 1u);
+    rebuild_point_count = mesh->point_count + 1u;
     input_points = (TMPoint *) calloc(rebuild_point_count, sizeof(*input_points));
     if (input_points == NULL) {
         return TM_ERR_ALLOC;
     }
 
     memcpy(input_points, mesh->points, mesh->point_count * sizeof(*input_points));
-    if (blocker_index >= 0) {
-        point_index = blocker_index;
-    } else {
-        point_index = (int) mesh->point_count;
-        input_points[point_index].xy[0] = split_point[0];
-        input_points[point_index].xy[1] = split_point[1];
-        input_points[point_index].original_index = point_index;
-        input_points[point_index].kind = TM_VERTEX_SEGMENT_SPLIT;
-        input_points[point_index].incident_triangle = -1;
-        input_points[point_index].protection_apex = -1;
-        input_points[point_index].protection_side = TM_PROTECTION_SIDE_NONE;
-        input_points[point_index].protection_level = 0;
-    }
+    point_index = (int) mesh->point_count;
+    input_points[point_index].xy[0] = split_point[0];
+    input_points[point_index].xy[1] = split_point[1];
+    input_points[point_index].original_index = point_index;
+    input_points[point_index].kind = TM_VERTEX_SEGMENT_SPLIT;
+    input_points[point_index].incident_triangle = -1;
+    input_points[point_index].protection_apex = -1;
+    input_points[point_index].protection_side = TM_PROTECTION_SIDE_NONE;
+    input_points[point_index].protection_level = 0;
 
     status = tm_build_mesh(input_points, rebuild_point_count, &rebuilt);
     if (status == TM_OK) {
@@ -1566,13 +1575,25 @@ static TMStatus tm_restore_constrained_delaunay(TMMesh *mesh, const TMBuildOptio
                 if (neighbor < 0 || (size_t) neighbor <= tri_index || mesh->triangles[tri_index].constrained[edge]) {
                     continue;
                 }
+                if (!tm_edge_is_flippable(mesh, (int) tri_index, edge)) {
+                    continue;
+                }
 
                 if (!tm_edge_is_locally_delaunay(mesh, (int) tri_index, edge)) {
                     TMStatus status;
+                    const char *detail;
 
                     tm_verbose_log(options, "restore CDT: flip edge in triangle %zu edge %d", tri_index, edge);
                     status = tm_flip_edge(mesh, (int) tri_index, edge);
                     if (status != TM_OK) {
+                        detail = tm_last_pslg_error_detail();
+                        tm_set_pslg_error_detail(
+                            "restore constrained Delaunay failed at triangle %zu edge %d%s%s",
+                            tri_index,
+                            edge,
+                            (detail != NULL && detail[0] != '\0') ? ": " : "",
+                            (detail != NULL) ? detail : ""
+                        );
                         return status;
                     }
                     changed = 1;
@@ -1614,23 +1635,52 @@ static TMStatus tm_split_segment_with_point(
     int edge;
     int point_index = -1;
     TMStatus status;
+    const char *detail;
 
     if (!tm_mesh_has_edge(mesh, segment->v[0], segment->v[1], &triangle_index, &edge)) {
+        tm_set_pslg_error_detail(
+            "split segment: live mesh edge %d-%d is missing for segment index %zu",
+            segment->v[0],
+            segment->v[1],
+            segment_index
+        );
         return TM_ERR_INVALID_MESH;
     }
 
     status = tm_insert_point_on_edge(mesh, triangle_index, edge, point, kind, &point_index);
     if (status != TM_OK) {
+        detail = tm_last_pslg_error_detail();
+        tm_set_pslg_error_detail(
+            "split segment %d-%d failed while inserting point%s%s",
+            segment->v[0],
+            segment->v[1],
+            (detail != NULL && detail[0] != '\0') ? ": " : "",
+            (detail != NULL) ? detail : ""
+        );
         return status;
     }
 
     status = tm_split_segment_registry(mesh, segment_index, point_index);
     if (status != TM_OK) {
+        tm_set_pslg_error_detail(
+            "split segment: registry update failed for %d-%d at point %d",
+            segment->v[0],
+            segment->v[1],
+            point_index
+        );
         return status;
     }
 
     status = tm_update_after_local_edit(mesh, options);
     if (status != TM_OK) {
+        detail = tm_last_pslg_error_detail();
+        tm_set_pslg_error_detail(
+            "split segment %d-%d failed during local update%s%s",
+            segment->v[0],
+            segment->v[1],
+            (detail != NULL && detail[0] != '\0') ? ": " : "",
+            (detail != NULL) ? detail : ""
+        );
         return status;
     }
 
@@ -1749,7 +1799,6 @@ static TMStatus tm_build_shell_chain(
 )
 {
     double segment_length = sqrt(tm_segment_length_squared(mesh, apex, outer));
-    double direction[2];
     int inner = apex;
     size_t level;
 
@@ -1757,11 +1806,9 @@ static TMStatus tm_build_shell_chain(
         return TM_ERR_INVALID_MESH;
     }
 
-    direction[0] = (mesh->points[outer].xy[0] - mesh->points[apex].xy[0]) / segment_length;
-    direction[1] = (mesh->points[outer].xy[1] - mesh->points[apex].xy[1]) / segment_length;
-
     for (level = 1; level <= levels; ++level) {
         double distance = base_length * (double) (1ULL << (level - 1));
+        double t = distance / segment_length;
         double point[2];
         int point_index;
         TMStatus status;
@@ -1770,22 +1817,44 @@ static TMStatus tm_build_shell_chain(
             return TM_ERR_INVALID_MESH;
         }
 
-        point[0] = mesh->points[apex].xy[0] + direction[0] * distance;
-        point[1] = mesh->points[apex].xy[1] + direction[1] * distance;
+        point[0] = mesh->points[apex].xy[0] + (mesh->points[outer].xy[0] - mesh->points[apex].xy[0]) * t;
+        point[1] = mesh->points[apex].xy[1] + (mesh->points[outer].xy[1] - mesh->points[apex].xy[1]) * t;
 
         status = tm_split_segment_with_point(mesh, segment_index, point, TM_VERTEX_SEGMENT_SPLIT, options, &point_index);
         if (status != TM_OK) {
+            const char *detail = tm_last_pslg_error_detail();
+
+            tm_set_pslg_error_detail(
+                "acute shell protection failed at apex %d level %zu on side %d%s%s",
+                apex,
+                level,
+                (int) side,
+                (detail != NULL && detail[0] != '\0') ? ": " : "",
+                (detail != NULL) ? detail : ""
+            );
             return status;
         }
 
         tm_mark_shell_point(mesh, point_index, apex, side, (unsigned int) level);
         status = tm_mark_live_segment_protected_with_apex(mesh, inner, point_index, apex);
         if (status != TM_OK) {
+            tm_set_pslg_error_detail(
+                "acute shell protection failed to protect segment %d-%d for apex %d",
+                inner,
+                point_index,
+                apex
+            );
             return status;
         }
 
         inner = point_index;
         if (level < levels && !tm_find_live_segment_index(mesh, inner, outer, &segment_index)) {
+            tm_set_pslg_error_detail(
+                "acute shell protection lost live segment %d-%d for apex %d",
+                inner,
+                outer,
+                apex
+            );
             return TM_ERR_INVALID_MESH;
         }
     }
@@ -1893,6 +1962,14 @@ static TMStatus tm_apply_acute_corner_protection(TMMesh *mesh, const TMBuildOpti
             status = tm_apply_shell_acute_corner_protection(mesh, incident_segments, apex, left, right, levels, options);
         }
         if (status != TM_OK) {
+            const char *detail = tm_last_pslg_error_detail();
+
+            tm_set_pslg_error_detail(
+                "acute protection failed at apex %d%s%s",
+                apex,
+                (detail != NULL && detail[0] != '\0') ? ": " : "",
+                (detail != NULL) ? detail : ""
+            );
             return status;
         }
     }
@@ -2524,6 +2601,7 @@ TMStatus tm_build_coverage_mesh(
 )
 {
     TMPSLG working_pslg;
+    int *pre_refine_markers = NULL;
     size_t segment_index;
     TMStatus status;
 
@@ -2618,6 +2696,22 @@ TMStatus tm_build_coverage_mesh(
     }
 
     if (tm_refinement_enabled(options)) {
+        status = tm_assign_coverage_regions(out_mesh, regions, region_count, &pre_refine_markers);
+        if (status != TM_OK) {
+            tm_free_pslg(&working_pslg);
+            tm_free_mesh(out_mesh);
+            return status;
+        }
+
+        status = tm_compact_marked_triangles(out_mesh, &pre_refine_markers);
+        free(pre_refine_markers);
+        pre_refine_markers = NULL;
+        if (status != TM_OK) {
+            tm_free_pslg(&working_pslg);
+            tm_free_mesh(out_mesh);
+            return status;
+        }
+
         status = tm_apply_acute_corner_protection(out_mesh, options);
         if (status != TM_OK) {
             tm_free_pslg(&working_pslg);

@@ -10,9 +10,23 @@ def main() -> int:
     parser.add_argument("input_path", help="Path to a .pts or .pslg file")
     parser.add_argument("out_base", help="Output file prefix")
     parser.add_argument("--min-angle", type=float, default=20.0, help="Target minimum angle in degrees")
-    parser.add_argument("--max-area", type=float, default=None, help="Maximum triangle area for PSLG refinement")
-    parser.add_argument("--max-edge-length", type=float, default=None, help="Maximum PSLG segment length before meshing")
-    parser.add_argument("--no-refine", action="store_true", help="Disable PSLG refinement")
+    parser.add_argument(
+        "--max-area",
+        type=float,
+        default=None,
+        help="Advanced area cap for refinement. Prefer --max-edge-length for size control.",
+    )
+    parser.add_argument(
+        "--max-edge-length",
+        type=float,
+        default=None,
+        help="Maximum target constrained-edge length / nominal mesh spacing in the input plane.",
+    )
+    parser.add_argument(
+        "--no-refine",
+        action="store_true",
+        help="Disable quality refinement. Leave refinement enabled when no global size cap is set.",
+    )
     parser.add_argument("--off-centers", action="store_true", help="Use off-centers for bad-triangle insertion")
     parser.add_argument(
         "--acute-protection",

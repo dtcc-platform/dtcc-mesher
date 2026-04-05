@@ -81,6 +81,7 @@ TMStatus tm_rebuild_topology(TMMesh *mesh);
 void tm_triangle_edge_vertices(const TMTriangle *triangle, int edge, int *out_a, int *out_b);
 int tm_find_edge_in_triangle(const TMTriangle *triangle, int a, int b);
 int tm_triangle_contains_vertex(const TMTriangle *triangle, int vertex_index);
+int tm_edge_is_flippable(const TMMesh *mesh, int triangle_index, int edge);
 int tm_edge_is_locally_delaunay(const TMMesh *mesh, int triangle_index, int edge);
 int tm_triangle_is_quality_exempt(const TMMesh *mesh, int triangle_index);
 size_t tm_count_protected_corners(const TMMesh *mesh);

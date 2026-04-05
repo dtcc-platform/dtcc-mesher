@@ -1,12 +1,14 @@
 #include "mesh.h"
 
 #include <ctype.h>
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "io_pslg.h"
 #include "predicates.h"
 
 typedef struct {
@@ -92,17 +94,29 @@ static int tm_point_nearly_on_segment(const TMPoint *a, const TMPoint *b, const 
     double dx = b->xy[0] - a->xy[0];
     double dy = b->xy[1] - a->xy[1];
     double len_sq = dx * dx + dy * dy;
-    double cross = dx * (point[1] - a->xy[1]) - dy * (point[0] - a->xy[0]);
-    double dot = (point[0] - a->xy[0]) * (point[0] - b->xy[0]) +
-                 (point[1] - a->xy[1]) * (point[1] - b->xy[1]);
+    double scale;
     double tolerance;
+    double t;
+    double projection[2];
+    double distance_sq;
 
     if (len_sq == 0.0) {
         return 0;
     }
 
-    tolerance = 1e-12 * ((len_sq > 1.0) ? len_sq : 1.0);
-    return fabs(cross) <= tolerance && dot <= tolerance;
+    scale = fabs(a->xy[0]) + fabs(a->xy[1]) + fabs(b->xy[0]) + fabs(b->xy[1]) + fabs(point[0]) + fabs(point[1]);
+    tolerance = 64.0 * DBL_EPSILON * ((scale > 1.0) ? scale : 1.0);
+
+    t = ((point[0] - a->xy[0]) * dx + (point[1] - a->xy[1]) * dy) / len_sq;
+    if (t < -tolerance || t > 1.0 + tolerance) {
+        return 0;
+    }
+
+    projection[0] = a->xy[0] + t * dx;
+    projection[1] = a->xy[1] + t * dy;
+    distance_sq = (point[0] - projection[0]) * (point[0] - projection[0]) +
+                  (point[1] - projection[1]) * (point[1] - projection[1]);
+    return distance_sq <= tolerance * tolerance;
 }
 
 static int tm_compare_points_lex(const void *lhs, const void *rhs)
@@ -965,7 +979,7 @@ int tm_triangle_contains_vertex(const TMTriangle *triangle, int vertex_index)
     return triangle->v[0] == vertex_index || triangle->v[1] == vertex_index || triangle->v[2] == vertex_index;
 }
 
-int tm_edge_is_locally_delaunay(const TMMesh *mesh, int triangle_index, int edge)
+int tm_edge_is_flippable(const TMMesh *mesh, int triangle_index, int edge)
 {
     const TMTriangle *triangle;
     const TMTriangle *neighbor;
@@ -982,18 +996,47 @@ int tm_edge_is_locally_delaunay(const TMMesh *mesh, int triangle_index, int edge
 
     triangle = &mesh->triangles[triangle_index];
     neighbor_index = triangle->nbr[edge];
-
     if (neighbor_index < 0 || triangle->constrained[edge]) {
-        return 1;
+        return 0;
     }
 
     neighbor = &mesh->triangles[neighbor_index];
     tm_triangle_edge_vertices(triangle, edge, &a, &b);
     neighbor_edge = tm_find_edge_in_triangle(neighbor, a, b);
     if (neighbor_edge < 0 || neighbor->constrained[neighbor_edge]) {
+        return 0;
+    }
+
+    c = triangle->v[edge];
+    d = neighbor->v[neighbor_edge];
+    return tm_orient_value(&mesh->points[c], &mesh->points[a], &mesh->points[d]) > 0.0 &&
+           tm_orient_value(&mesh->points[c], &mesh->points[d], &mesh->points[b]) > 0.0;
+}
+
+int tm_edge_is_locally_delaunay(const TMMesh *mesh, int triangle_index, int edge)
+{
+    const TMTriangle *triangle;
+    const TMTriangle *neighbor;
+    int a;
+    int b;
+    int neighbor_index;
+    int neighbor_edge;
+    int c;
+    int d;
+
+    if (mesh == NULL || triangle_index < 0 || (size_t) triangle_index >= mesh->triangle_count || edge < 0 || edge > 2) {
+        return 0;
+    }
+
+    if (!tm_edge_is_flippable(mesh, triangle_index, edge)) {
         return 1;
     }
 
+    triangle = &mesh->triangles[triangle_index];
+    neighbor_index = triangle->nbr[edge];
+    neighbor = &mesh->triangles[neighbor_index];
+    tm_triangle_edge_vertices(triangle, edge, &a, &b);
+    neighbor_edge = tm_find_edge_in_triangle(neighbor, a, b);
     c = triangle->v[edge];
     d = neighbor->v[neighbor_edge];
     return tm_incircle_value(&mesh->points[a], &mesh->points[b], &mesh->points[c], &mesh->points[d]) <= 0.0;
@@ -1201,17 +1244,33 @@ TMStatus tm_flip_edge(TMMesh *mesh, int triangle_index, int edge)
     TMStatus status;
 
     if (mesh == NULL || triangle_index < 0 || (size_t) triangle_index >= mesh->triangle_count || edge < 0 || edge > 2) {
+        tm_set_pslg_error_detail("flip edge: invalid triangle=%d edge=%d", triangle_index, edge);
         return TM_ERR_INTERNAL;
     }
 
     neighbor_index = mesh->triangles[triangle_index].nbr[edge];
     if (neighbor_index < 0 || mesh->triangles[triangle_index].constrained[edge]) {
+        tm_set_pslg_error_detail(
+            "flip edge: triangle %d edge %d has no flippable neighbor (neighbor=%d constrained=%d)",
+            triangle_index,
+            edge,
+            neighbor_index,
+            (int) mesh->triangles[triangle_index].constrained[edge]
+        );
         return TM_ERR_INTERNAL;
     }
 
     tm_triangle_edge_vertices(&mesh->triangles[triangle_index], edge, &a, &b);
     neighbor_edge = tm_find_edge_in_triangle(&mesh->triangles[neighbor_index], a, b);
     if (neighbor_edge < 0 || mesh->triangles[neighbor_index].constrained[neighbor_edge]) {
+        tm_set_pslg_error_detail(
+            "flip edge: neighbor %d does not mirror edge %d-%d (neighbor_edge=%d constrained=%d)",
+            neighbor_index,
+            a,
+            b,
+            neighbor_edge,
+            neighbor_edge >= 0 ? (int) mesh->triangles[neighbor_index].constrained[neighbor_edge] : -1
+        );
         return TM_ERR_INTERNAL;
     }
 
@@ -1220,6 +1279,13 @@ TMStatus tm_flip_edge(TMMesh *mesh, int triangle_index, int edge)
 
     if (tm_orient_value(&mesh->points[c], &mesh->points[a], &mesh->points[d]) <= 0.0 ||
         tm_orient_value(&mesh->points[c], &mesh->points[d], &mesh->points[b]) <= 0.0) {
+        tm_set_pslg_error_detail(
+            "flip edge: non-convex quad for diagonal %d-%d with opposite vertices %d and %d",
+            a,
+            b,
+            c,
+            d
+        );
         return TM_ERR_INTERNAL;
     }
 
@@ -1240,6 +1306,13 @@ TMStatus tm_flip_edge(TMMesh *mesh, int triangle_index, int edge)
     }
 
     if (!tm_make_triangle(&first, c, a, d, mesh->points) || !tm_make_triangle(&second, c, d, b, mesh->points)) {
+        tm_set_pslg_error_detail(
+            "flip edge: replacement triangles degenerate for diagonal %d-%d with opposite vertices %d and %d",
+            a,
+            b,
+            c,
+            d
+        );
         free(constraints);
         return TM_ERR_INTERNAL;
     }
@@ -1260,6 +1333,20 @@ TMStatus tm_flip_edge(TMMesh *mesh, int triangle_index, int edge)
     status = tm_rebuild_topology(mesh);
     if (status == TM_OK) {
         status = tm_apply_constraint_pairs(mesh, constraints, constraint_count);
+        if (status != TM_OK) {
+            tm_set_pslg_error_detail(
+                "flip edge: failed to restore %zu constrained edge pair(s) after flipping %d-%d",
+                constraint_count,
+                a,
+                b
+            );
+        }
+    } else {
+        tm_set_pslg_error_detail(
+            "flip edge: topology rebuild failed after flipping diagonal %d-%d",
+            a,
+            b
+        );
     }
 
     free(constraints);
@@ -1383,6 +1470,11 @@ TMStatus tm_insert_point_on_edge(
     TMStatus status;
 
     if (mesh == NULL || point == NULL || triangle_index < 0 || (size_t) triangle_index >= mesh->triangle_count || edge < 0 || edge > 2) {
+        tm_set_pslg_error_detail(
+            "insert point on edge: invalid triangle=%d edge=%d",
+            triangle_index,
+            edge
+        );
         return TM_ERR_INTERNAL;
     }
 
@@ -1390,6 +1482,13 @@ TMStatus tm_insert_point_on_edge(
     c = mesh->triangles[triangle_index].v[edge];
 
     if (!tm_point_nearly_on_segment(&mesh->points[a], &mesh->points[b], point)) {
+        tm_set_pslg_error_detail(
+            "insert point on edge: point (%.12g, %.12g) is not on segment %d-%d",
+            point[0],
+            point[1],
+            a,
+            b
+        );
         return TM_ERR_INTERNAL;
     }
 
@@ -1397,6 +1496,12 @@ TMStatus tm_insert_point_on_edge(
     if (neighbor_index >= 0) {
         neighbor_edge = tm_find_edge_in_triangle(&mesh->triangles[neighbor_index], a, b);
         if (neighbor_edge < 0) {
+            tm_set_pslg_error_detail(
+                "insert point on edge: triangle %d edge %d has inconsistent neighbor %d",
+                triangle_index,
+                edge,
+                neighbor_index
+            );
             return TM_ERR_INVALID_MESH;
         }
         d = mesh->triangles[neighbor_index].v[neighbor_edge];
@@ -1445,6 +1550,12 @@ TMStatus tm_insert_point_on_edge(
 
     if (!tm_make_triangle(&first, c, a, point_index, mesh->points) ||
         !tm_make_triangle(&second, c, point_index, b, mesh->points)) {
+        tm_set_pslg_error_detail(
+            "insert point on edge: splitting %d-%d produced degenerate primary triangles via point %d",
+            a,
+            b,
+            point_index
+        );
         free(constraints);
         return TM_ERR_INTERNAL;
     }
@@ -1458,6 +1569,12 @@ TMStatus tm_insert_point_on_edge(
     if (neighbor_index >= 0 && status == TM_OK) {
         if (!tm_make_triangle(&third, d, b, point_index, mesh->points) ||
             !tm_make_triangle(&fourth, d, point_index, a, mesh->points)) {
+            tm_set_pslg_error_detail(
+                "insert point on edge: splitting %d-%d produced degenerate neighbor triangles via point %d",
+                a,
+                b,
+                point_index
+            );
             free(constraints);
             return TM_ERR_INTERNAL;
         }
@@ -1478,6 +1595,22 @@ TMStatus tm_insert_point_on_edge(
     status = tm_rebuild_topology(mesh);
     if (status == TM_OK) {
         status = tm_apply_constraint_pairs(mesh, constraints, constraint_count);
+        if (status != TM_OK) {
+            tm_set_pslg_error_detail(
+                "insert point on edge: failed to restore %zu constrained edge pair(s) after splitting %d-%d at point %d",
+                constraint_count,
+                a,
+                b,
+                point_index
+            );
+        }
+    } else {
+        tm_set_pslg_error_detail(
+            "insert point on edge: topology rebuild failed after splitting %d-%d at point %d",
+            a,
+            b,
+            point_index
+        );
     }
 
     free(constraints);

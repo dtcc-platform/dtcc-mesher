@@ -161,7 +161,7 @@ mesh = dm.mesh(
     domain,
     options=dm.MeshingOptions(
         min_angle=25.0,
-        max_area=0.5,
+        max_edge_length=0.75,
         off_centers=True,
     ),
 )
@@ -202,8 +202,12 @@ Recommended usage pattern:
 `MeshingOptions` fields:
 
 - `min_angle`
-- `max_area`
-- `max_edge_length`
+- `max_edge_length`:
+  preferred global size control, interpreted as the maximum target constrained-edge
+  length / nominal mesh spacing in the input plane. Use `None` for unrestricted size.
+- `max_area`:
+  lower-level area cap for backends that refine by area; most callers should prefer
+  `max_edge_length`
 - `refine`
 - `off_centers`
 - `verbose`
