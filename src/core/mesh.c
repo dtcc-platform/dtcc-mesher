@@ -124,6 +124,22 @@ static int tm_point_nearly_on_segment(const TMPoint *a, const TMPoint *b, const 
     return distance_sq <= tolerance * tolerance;
 }
 
+static int tm_point_nearly_equals_vertex(const TMPoint *vertex, const double point[2])
+{
+    double scale;
+    double tolerance;
+    double dx;
+    double dy;
+    double distance_sq;
+
+    scale = fabs(vertex->xy[0]) + fabs(vertex->xy[1]) + fabs(point[0]) + fabs(point[1]);
+    tolerance = 64.0 * DBL_EPSILON * ((scale > 1.0) ? scale : 1.0);
+    dx = point[0] - vertex->xy[0];
+    dy = point[1] - vertex->xy[1];
+    distance_sq = dx * dx + dy * dy;
+    return distance_sq <= tolerance * tolerance;
+}
+
 static int tm_compare_points_lex(const void *lhs, const void *rhs)
 {
     const TMPoint *a = (const TMPoint *) lhs;
@@ -610,6 +626,35 @@ static TMStatus tm_redirect_neighbor_reference(
 
     mesh->triangles[triangle_index].nbr[edge] = new_neighbor;
     return TM_OK;
+}
+
+static int tm_edge_matches_live_segment(const TMMesh *mesh, int a, int b)
+{
+    size_t segment_index;
+    int lo = (a < b) ? a : b;
+    int hi = (a < b) ? b : a;
+
+    if (mesh == NULL) {
+        return 0;
+    }
+
+    for (segment_index = 0; segment_index < mesh->segment_count; ++segment_index) {
+        const TMSegment *segment = &mesh->segments[segment_index];
+        int seg_lo;
+        int seg_hi;
+
+        if (!segment->live) {
+            continue;
+        }
+
+        seg_lo = (segment->v[0] < segment->v[1]) ? segment->v[0] : segment->v[1];
+        seg_hi = (segment->v[0] < segment->v[1]) ? segment->v[1] : segment->v[0];
+        if (seg_lo == lo && seg_hi == hi) {
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 static TMStatus tm_link_triangles_across_edge(TMMesh *mesh, int first_index, int second_index, int a, int b)
@@ -1237,6 +1282,9 @@ int tm_edge_is_flippable(const TMMesh *mesh, int triangle_index, int edge)
 
     neighbor = &mesh->triangles[neighbor_index];
     tm_triangle_edge_vertices(triangle, edge, &a, &b);
+    if (tm_edge_matches_live_segment(mesh, a, b)) {
+        return 0;
+    }
     neighbor_edge = tm_find_edge_in_triangle(neighbor, a, b);
     if (neighbor_edge < 0 || neighbor->constrained[neighbor_edge]) {
         return 0;
@@ -1312,8 +1360,6 @@ static int tm_shell_edge_is_exempt(const TMMesh *mesh, int a, int b)
 {
     const TMPoint *pa = &mesh->points[a];
     const TMPoint *pb = &mesh->points[b];
-    unsigned int level_lo;
-    unsigned int level_hi;
 
     if (pa->protection_apex < 0 || pb->protection_apex < 0) {
         return 0;
@@ -1329,10 +1375,75 @@ static int tm_shell_edge_is_exempt(const TMMesh *mesh, int a, int b)
     if (pa->protection_level == 0 || pb->protection_level == 0) {
         return 0;
     }
+    return 1;
+}
+
+static int tm_shell_chain_edge_is_exempt(const TMMesh *mesh, int a, int b)
+{
+    const TMPoint *pa = &mesh->points[a];
+    const TMPoint *pb = &mesh->points[b];
+    unsigned int level_lo;
+    unsigned int level_hi;
+    size_t segment_index;
+
+    if (pa->protection_apex < 0 || pb->protection_apex < 0) {
+        return 0;
+    }
+    if (pa->protection_apex != pb->protection_apex) {
+        return 0;
+    }
+    if (pa->protection_side == TM_PROTECTION_SIDE_NONE ||
+        pb->protection_side == TM_PROTECTION_SIDE_NONE ||
+        pa->protection_side != pb->protection_side) {
+        return 0;
+    }
+    if (pa->protection_level == 0 || pb->protection_level == 0) {
+        return 0;
+    }
 
     level_lo = (pa->protection_level < pb->protection_level) ? pa->protection_level : pb->protection_level;
     level_hi = (pa->protection_level < pb->protection_level) ? pb->protection_level : pa->protection_level;
-    return level_hi - level_lo <= 1;
+    if (level_hi - level_lo != 1) {
+        return 0;
+    }
+    if (!tm_find_live_edge_segment(mesh, a, b, &segment_index)) {
+        return 0;
+    }
+
+    return mesh->segments[segment_index].is_protected != 0;
+}
+
+static int tm_triangle_shortest_edge_is_exempt(const TMMesh *mesh, const TMTriangle *triangle)
+{
+    int edge;
+    int best_a = -1;
+    int best_b = -1;
+    double best_length_sq = 0.0;
+
+    if (mesh == NULL || triangle == NULL) {
+        return 0;
+    }
+
+    for (edge = 0; edge < 3; ++edge) {
+        int a;
+        int b;
+        double dx;
+        double dy;
+        double length_sq;
+
+        tm_triangle_edge_vertices(triangle, edge, &a, &b);
+        dx = mesh->points[b].xy[0] - mesh->points[a].xy[0];
+        dy = mesh->points[b].xy[1] - mesh->points[a].xy[1];
+        length_sq = dx * dx + dy * dy;
+
+        if (edge == 0 || length_sq < best_length_sq) {
+            best_length_sq = length_sq;
+            best_a = a;
+            best_b = b;
+        }
+    }
+
+    return tm_shell_edge_is_exempt(mesh, best_a, best_b);
 }
 
 int tm_triangle_is_quality_exempt(const TMMesh *mesh, int triangle_index)
@@ -1345,33 +1456,16 @@ int tm_triangle_is_quality_exempt(const TMMesh *mesh, int triangle_index)
     }
 
     triangle = &mesh->triangles[triangle_index];
+    if (tm_triangle_shortest_edge_is_exempt(mesh, triangle)) {
+        return 1;
+    }
 
     for (edge = 0; edge < 3; ++edge) {
         int a;
         int b;
 
         tm_triangle_edge_vertices(triangle, edge, &a, &b);
-        if (tm_shell_edge_is_exempt(mesh, a, b)) {
-            return 1;
-        }
-    }
-
-    for (edge = 0; edge < 3; ++edge) {
-        int apex = triangle->v[edge];
-        int left = triangle->v[(edge + 1) % 3];
-        int right = triangle->v[(edge + 2) % 3];
-        size_t left_segment_index;
-        size_t right_segment_index;
-
-        if (!tm_find_live_edge_segment(mesh, apex, left, &left_segment_index) ||
-            !tm_find_live_edge_segment(mesh, apex, right, &right_segment_index)) {
-            continue;
-        }
-
-        if (mesh->segments[left_segment_index].is_protected &&
-            mesh->segments[right_segment_index].is_protected &&
-            mesh->segments[left_segment_index].protected_apex == apex &&
-            mesh->segments[right_segment_index].protected_apex == apex) {
+        if (tm_shell_chain_edge_is_exempt(mesh, a, b)) {
             return 1;
         }
     }
@@ -1432,14 +1526,16 @@ TMStatus tm_locate_point(const TMMesh *mesh, const double point[2], int start_tr
             int a;
             int b;
             double side;
+            int near_edge;
 
             tm_triangle_edge_vertices(triangle, edge, &a, &b);
             side = tm_orient_coords(&mesh->points[a], &mesh->points[b], point);
-            if (side < 0.0) {
+            near_edge = tm_point_nearly_on_segment(&mesh->points[a], &mesh->points[b], point);
+            if (side < 0.0 && !near_edge) {
                 boundary_edge = edge;
                 break;
             }
-            if (side == 0.0) {
+            if (side == 0.0 || near_edge) {
                 on_edge = edge;
             }
         }
@@ -1504,6 +1600,14 @@ TMStatus tm_flip_edge(TMMesh *mesh, int triangle_index, int edge)
     }
 
     tm_triangle_edge_vertices(&mesh->triangles[triangle_index], edge, &a, &b);
+    if (tm_edge_matches_live_segment(mesh, a, b)) {
+        tm_set_pslg_error_detail(
+            "flip edge: edge %d-%d is a live constrained segment",
+            a,
+            b
+        );
+        return TM_ERR_INTERNAL;
+    }
     neighbor_edge = tm_find_edge_in_triangle(&mesh->triangles[neighbor_index], a, b);
     if (neighbor_edge < 0 || mesh->triangles[neighbor_index].constrained[neighbor_edge]) {
         tm_set_pslg_error_detail(
@@ -1650,6 +1754,26 @@ TMStatus tm_insert_point_in_triangle(
     v0 = mesh->triangles[triangle_index].v[0];
     v1 = mesh->triangles[triangle_index].v[1];
     v2 = mesh->triangles[triangle_index].v[2];
+    if (kind == TM_VERTEX_TRIANGLE_SPLIT) {
+        if (tm_point_nearly_equals_vertex(&mesh->points[v0], point)) {
+            if (out_point_index != NULL) {
+                *out_point_index = v0;
+            }
+            return TM_OK;
+        }
+        if (tm_point_nearly_equals_vertex(&mesh->points[v1], point)) {
+            if (out_point_index != NULL) {
+                *out_point_index = v1;
+            }
+            return TM_OK;
+        }
+        if (tm_point_nearly_equals_vertex(&mesh->points[v2], point)) {
+            if (out_point_index != NULL) {
+                *out_point_index = v2;
+            }
+            return TM_OK;
+        }
+    }
     triangle = mesh->triangles[triangle_index];
     second_index = (int) mesh->triangle_count;
     third_index = second_index + 1;
@@ -1807,6 +1931,32 @@ TMStatus tm_insert_point_on_edge(
             return TM_ERR_INVALID_MESH;
         }
         d = mesh->triangles[neighbor_index].v[neighbor_edge];
+    }
+    if (kind == TM_VERTEX_TRIANGLE_SPLIT) {
+        if (tm_point_nearly_equals_vertex(&mesh->points[a], point)) {
+            if (out_point_index != NULL) {
+                *out_point_index = a;
+            }
+            return TM_OK;
+        }
+        if (tm_point_nearly_equals_vertex(&mesh->points[b], point)) {
+            if (out_point_index != NULL) {
+                *out_point_index = b;
+            }
+            return TM_OK;
+        }
+        if (tm_point_nearly_equals_vertex(&mesh->points[c], point)) {
+            if (out_point_index != NULL) {
+                *out_point_index = c;
+            }
+            return TM_OK;
+        }
+        if (d >= 0 && tm_point_nearly_equals_vertex(&mesh->points[d], point)) {
+            if (out_point_index != NULL) {
+                *out_point_index = d;
+            }
+            return TM_OK;
+        }
     }
     triangle = mesh->triangles[triangle_index];
     if (neighbor_index >= 0) {

@@ -9,7 +9,7 @@
 
 #include "predicates.h"
 
-static char tm_pslg_error_detail[256];
+static char tm_pslg_error_detail[1024];
 
 void tm_clear_pslg_error_detail(void)
 {

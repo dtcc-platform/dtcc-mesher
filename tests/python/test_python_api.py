@@ -404,6 +404,25 @@ def test_mesh_graph_case55_unrestricted_completes_with_good_quality():
     assert mesh.summary.count_min_angle_lt_20 <= 2
 
 
+def test_mesh_graph_case34_unrestricted_completes_with_good_quality():
+    with np.load(_case_path("stockholm_case34_graph_unrestricted.npz")) as data:
+        graph = dm.CoverageGraph(
+            points=data["points"],
+            segments=data["segments"],
+            region_points=data["region_points"],
+            region_markers=data["region_markers"],
+        )
+
+    mesh = dm.mesh(
+        graph,
+        options=dm.MeshingOptions(min_angle=25.0, refine=True, max_refine_steps=20000),
+    )
+
+    assert mesh.summary.triangle_count > 7500
+    assert mesh.summary.radius_edge_ratio_max < 1.6
+    assert mesh.summary.count_min_angle_lt_20 <= 2
+
+
 def test_plot_mesh_with_summary_smoke():
     matplotlib = pytest.importorskip("matplotlib")
     matplotlib.use("Agg")
