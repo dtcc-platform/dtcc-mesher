@@ -1417,6 +1417,7 @@ static TMStatus tm_split_recovery_segment(
     int blocker_index = -1;
     double blocker_distance = 0.0;
     int point_index;
+    size_t rebuild_point_count;
     TMStatus status;
 
     tm_verbose_log(options, "recover segment %d-%d stalled; split and retry", a, b);
@@ -1435,23 +1436,28 @@ static TMStatus tm_split_recovery_segment(
     }
 
     memset(&rebuilt, 0, sizeof(rebuilt));
-    input_points = (TMPoint *) calloc(mesh->point_count + 1, sizeof(*input_points));
+    rebuild_point_count = mesh->point_count + (blocker_index >= 0 ? 0u : 1u);
+    input_points = (TMPoint *) calloc(rebuild_point_count, sizeof(*input_points));
     if (input_points == NULL) {
         return TM_ERR_ALLOC;
     }
 
     memcpy(input_points, mesh->points, mesh->point_count * sizeof(*input_points));
-    point_index = (int) mesh->point_count;
-    input_points[point_index].xy[0] = split_point[0];
-    input_points[point_index].xy[1] = split_point[1];
-    input_points[point_index].original_index = point_index;
-    input_points[point_index].kind = TM_VERTEX_SEGMENT_SPLIT;
-    input_points[point_index].incident_triangle = -1;
-    input_points[point_index].protection_apex = -1;
-    input_points[point_index].protection_side = TM_PROTECTION_SIDE_NONE;
-    input_points[point_index].protection_level = 0;
+    if (blocker_index >= 0) {
+        point_index = blocker_index;
+    } else {
+        point_index = (int) mesh->point_count;
+        input_points[point_index].xy[0] = split_point[0];
+        input_points[point_index].xy[1] = split_point[1];
+        input_points[point_index].original_index = point_index;
+        input_points[point_index].kind = TM_VERTEX_SEGMENT_SPLIT;
+        input_points[point_index].incident_triangle = -1;
+        input_points[point_index].protection_apex = -1;
+        input_points[point_index].protection_side = TM_PROTECTION_SIDE_NONE;
+        input_points[point_index].protection_level = 0;
+    }
 
-    status = tm_build_mesh(input_points, mesh->point_count + 1, &rebuilt);
+    status = tm_build_mesh(input_points, rebuild_point_count, &rebuilt);
     if (status == TM_OK) {
         size_t i;
 
@@ -1463,7 +1469,7 @@ static TMStatus tm_split_recovery_segment(
             rebuilt.point_count,
             rebuilt.triangle_count
         );
-        for (i = 0; i < rebuilt.point_count; ++i) {
+        for (i = 0; i < rebuild_point_count; ++i) {
             rebuilt.points[i].kind = input_points[i].kind;
             rebuilt.points[i].original_index = input_points[i].original_index;
             rebuilt.points[i].protection_apex = input_points[i].protection_apex;
@@ -1521,7 +1527,14 @@ static TMStatus tm_recover_segment(TMMesh *mesh, int a, int b, const TMBuildOpti
         tm_verbose_log(options, "recover segment %d-%d: flip crossing edge in triangle %d edge %d", a, b, triangle_index, edge);
         status = tm_flip_edge(mesh, triangle_index, edge);
         if (status != TM_OK) {
-            return status;
+            tm_verbose_log(
+                options,
+                "recover segment %d-%d: edge flip failed with status %d; split and retry",
+                a,
+                b,
+                (int) status
+            );
+            break;
         }
 
         if (tm_mesh_has_edge(mesh, a, b, NULL, NULL)) {

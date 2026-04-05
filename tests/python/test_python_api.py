@@ -215,6 +215,29 @@ def test_mesh_coverage_preserves_closed_outer_boundary_sampling():
     assert max(aspect_ratios) < 20.0
 
 
+def test_mesh_coverage_handles_courtyard_region_partition():
+    shapely = pytest.importorskip("shapely.geometry")
+
+    ground = shapely.Polygon(
+        [(0.0, 0.0), (12.0, 0.0), (12.0, 12.0), (0.0, 12.0), (0.0, 0.0)],
+        holes=[[(3.0, 3.0), (9.0, 3.0), (9.0, 9.0), (3.0, 9.0), (3.0, 3.0)]],
+    )
+    building = shapely.Polygon(
+        [(3.0, 3.0), (9.0, 3.0), (9.0, 9.0), (3.0, 9.0), (3.0, 3.0)],
+        holes=[[(4.5, 4.5), (7.5, 4.5), (7.5, 7.5), (4.5, 7.5), (4.5, 4.5)]],
+    )
+    courtyard = shapely.box(4.5, 4.5, 7.5, 7.5)
+
+    mesh = dm.mesh(
+        dm.Coverage([ground, building, courtyard], markers=[-2, 10, -2]),
+        options=dm.MeshingOptions(max_edge_length=1.5, min_angle=25.0, refine=False),
+    )
+
+    assert mesh.markers is not None
+    assert set(np.asarray(mesh.markers, dtype=int)) == {-2, 10}
+    assert mesh.summary.triangle_count > 0
+
+
 def test_mesh_graph_reports_t_junctions_in_coverage_input():
     points = np.array(
         [
