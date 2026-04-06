@@ -60,7 +60,7 @@ static void dtcc_mesher_print_usage(FILE *stream)
 {
     fprintf(
         stream,
-        "usage: dtcc_mesher [-h|--help] [--version] [-v|--verbose] [--refine|--no-refine] [--off-centers|--no-off-centers] [--acute-protection|--no-acute-protection] [--simple-acute-protection|--shell-acute-protection] [--min-angle deg] [--max-area area] [--protect-angle deg] [--max-refine-steps n] [--max-protection-levels n] input.(pts|pslg) outbase\n"
+        "usage: dtcc_mesher [-h|--help] [--version] [-v|--verbose] [--refine|--no-refine] [--acute-protection|--no-acute-protection] [--simple-acute-protection|--shell-acute-protection] [--min-angle deg] [--max-area area] [--protect-angle deg] [--max-refine-steps n] [--max-protection-levels n] input.(pts|pslg) outbase\n"
     );
 }
 
@@ -117,10 +117,6 @@ int main(int argc, char **argv)
             options.enable_refinement = 1;
         } else if (strcmp(argv[argi], "--no-refine") == 0) {
             options.enable_refinement = 0;
-        } else if (strcmp(argv[argi], "--off-centers") == 0) {
-            options.use_offcenters = 1;
-        } else if (strcmp(argv[argi], "--no-off-centers") == 0) {
-            options.use_offcenters = 0;
         } else if (strcmp(argv[argi], "--acute-protection") == 0) {
             options.enable_acute_protection = 1;
         } else if (strcmp(argv[argi], "--no-acute-protection") == 0) {

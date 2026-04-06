@@ -155,7 +155,6 @@ cleanup:
 static int load_pslg_mesh_with_options(
     const char *name,
     int refine,
-    int use_offcenters,
     int protect_acute_corners,
     TMAcuteProtectionMode acute_mode,
     double min_angle_deg,
@@ -172,7 +171,6 @@ static int load_pslg_mesh_with_options(
     memset(&pslg, 0, sizeof(pslg));
     options.verbose = 0;
     options.refine = refine;
-    options.use_offcenters = use_offcenters;
     options.protect_acute_corners = protect_acute_corners;
     options.acute_mode = acute_mode;
     options.min_angle_deg = min_angle_deg;
@@ -211,7 +209,7 @@ cleanup:
 
 static int load_pslg_mesh(const char *name, TMMesh *mesh)
 {
-    return load_pslg_mesh_with_options(name, 0, 0, 1, TM_ACUTE_MODE_SHELL, 20.0, mesh);
+    return load_pslg_mesh_with_options(name, 0, 1, TM_ACUTE_MODE_SHELL, 20.0, mesh);
 }
 
 static int find_first_interior_edge(const TMMesh *mesh, int *out_triangle, int *out_edge)
@@ -305,7 +303,7 @@ static int run_refined_pslg_quality_case(const char *name, double min_angle_deg,
     TMMesh mesh;
     TMTriangleMetric *metrics = NULL;
     TMSummary summary;
-    int ok = load_pslg_mesh_with_options(name, 1, 0, 1, TM_ACUTE_MODE_SHELL, min_angle_deg, &mesh);
+    int ok = load_pslg_mesh_with_options(name, 1, 1, TM_ACUTE_MODE_SHELL, min_angle_deg, &mesh);
 
     if (!ok) {
         return 0;
@@ -351,7 +349,7 @@ static int run_protected_pslg_quality_case(
     TMMesh mesh;
     TMTriangleMetric *metrics = NULL;
     TMSummary summary;
-    int ok = load_pslg_mesh_with_options(name, 1, 0, 1, TM_ACUTE_MODE_SHELL, min_angle_deg, &mesh);
+    int ok = load_pslg_mesh_with_options(name, 1, 1, TM_ACUTE_MODE_SHELL, min_angle_deg, &mesh);
 
     if (!ok) {
         return 0;
@@ -900,7 +898,7 @@ static int test_top_cluster_pslg_refined(void)
     TMMesh mesh;
     TMTriangleMetric *metrics = NULL;
     TMSummary summary;
-    int ok = load_pslg_mesh_with_options("top_cluster_domain", 1, 0, 1, TM_ACUTE_MODE_SHELL, 20.0, &mesh);
+    int ok = load_pslg_mesh_with_options("top_cluster_domain", 1, 1, TM_ACUTE_MODE_SHELL, 20.0, &mesh);
 
     if (!ok) {
         return 0;
@@ -932,61 +930,6 @@ cleanup:
     return ok;
 }
 
-static int test_top_cluster_pslg_offcenters(void)
-{
-    TMMesh circum_mesh;
-    TMMesh offcenter_mesh;
-    TMTriangleMetric *circum_metrics = NULL;
-    TMTriangleMetric *offcenter_metrics = NULL;
-    TMSummary circum_summary;
-    TMSummary offcenter_summary;
-    int ok = 0;
-
-    memset(&circum_mesh, 0, sizeof(circum_mesh));
-    memset(&offcenter_mesh, 0, sizeof(offcenter_mesh));
-
-    ok = load_pslg_mesh_with_options("top_cluster_domain", 1, 0, 1, TM_ACUTE_MODE_SHELL, 20.0, &circum_mesh) &&
-         load_pslg_mesh_with_options("top_cluster_domain", 1, 1, 1, TM_ACUTE_MODE_SHELL, 20.0, &offcenter_mesh);
-    if (!ok) {
-        tm_free_mesh(&circum_mesh);
-        tm_free_mesh(&offcenter_mesh);
-        return 0;
-    }
-
-    ok = validate_quality_mesh(&circum_mesh, 20.0) &&
-         validate_quality_mesh(&offcenter_mesh, 20.0) &&
-         verify_ccw(&circum_mesh) &&
-         verify_ccw(&offcenter_mesh);
-    if (!ok) {
-        fprintf(stderr, "top_cluster_domain off-center comparison failed quality checks\n");
-        goto cleanup;
-    }
-
-    if (tm_compute_metrics(&circum_mesh, &circum_metrics, &circum_summary) != TM_OK ||
-        tm_compute_metrics(&offcenter_mesh, &offcenter_metrics, &offcenter_summary) != TM_OK) {
-        fprintf(stderr, "failed to compute metrics for off-center comparison\n");
-        ok = 0;
-        goto cleanup;
-    }
-
-    ok = offcenter_summary.steiner_point_count <= circum_summary.steiner_point_count &&
-         offcenter_summary.triangle_count <= circum_summary.triangle_count &&
-         offcenter_summary.count_min_angle_lt_20 == 0;
-    if (!ok) {
-        fprintf(stderr, "off-center mode did not improve top_cluster_domain as expected\n");
-        goto cleanup;
-    }
-
-    ok = smoke_write_reports("top_cluster_domain_offcenter", &offcenter_mesh, offcenter_metrics, &offcenter_summary);
-
-cleanup:
-    tm_free_metrics(circum_metrics);
-    tm_free_metrics(offcenter_metrics);
-    tm_free_mesh(&circum_mesh);
-    tm_free_mesh(&offcenter_mesh);
-    return ok;
-}
-
 static int test_warped_disc64_domain_pslg_refined(void)
 {
     return run_refined_pslg_quality_case("warped_disc64_domain", 20.0, 1);
@@ -997,7 +940,7 @@ static int test_city_footprints_domain_refined(void)
     TMMesh mesh;
     TMTriangleMetric *metrics = NULL;
     TMSummary summary;
-    int ok = load_pslg_mesh_with_options("city_footprints_domain", 1, 0, 1, TM_ACUTE_MODE_SHELL, 20.0, &mesh);
+    int ok = load_pslg_mesh_with_options("city_footprints_domain", 1, 1, TM_ACUTE_MODE_SHELL, 20.0, &mesh);
 
     if (!ok) {
         return 0;
@@ -1041,7 +984,7 @@ static int test_city_downtown_domain_refined(void)
     TMMesh mesh;
     TMTriangleMetric *metrics = NULL;
     TMSummary summary;
-    int ok = load_pslg_mesh_with_options("city_downtown_domain", 1, 0, 1, TM_ACUTE_MODE_SHELL, 20.0, &mesh);
+    int ok = load_pslg_mesh_with_options("city_downtown_domain", 1, 1, TM_ACUTE_MODE_SHELL, 20.0, &mesh);
 
     if (!ok) {
         return 0;
@@ -1085,7 +1028,7 @@ static int test_city_tight_downtown_domain_refined(void)
     TMMesh mesh;
     TMTriangleMetric *metrics = NULL;
     TMSummary summary;
-    int ok = load_pslg_mesh_with_options("city_tight_downtown_domain", 1, 0, 1, TM_ACUTE_MODE_SHELL, 20.0, &mesh);
+    int ok = load_pslg_mesh_with_options("city_tight_downtown_domain", 1, 1, TM_ACUTE_MODE_SHELL, 20.0, &mesh);
 
     if (!ok) {
         return 0;
@@ -1137,8 +1080,8 @@ static int test_tiny_slit_shell_vs_simple(void)
     memset(&simple_mesh, 0, sizeof(simple_mesh));
     memset(&shell_mesh, 0, sizeof(shell_mesh));
 
-    ok = load_pslg_mesh_with_options("tiny_slit_domain", 1, 0, 1, TM_ACUTE_MODE_SIMPLE, 20.0, &simple_mesh) &&
-         load_pslg_mesh_with_options("tiny_slit_domain", 1, 0, 1, TM_ACUTE_MODE_SHELL, 20.0, &shell_mesh);
+    ok = load_pslg_mesh_with_options("tiny_slit_domain", 1, 1, TM_ACUTE_MODE_SIMPLE, 20.0, &simple_mesh) &&
+         load_pslg_mesh_with_options("tiny_slit_domain", 1, 1, TM_ACUTE_MODE_SHELL, 20.0, &shell_mesh);
     if (!ok) {
         tm_free_mesh(&simple_mesh);
         tm_free_mesh(&shell_mesh);
@@ -1208,7 +1151,6 @@ static int test_acute_wedge_needs_protection(void)
     memset(&mesh, 0, sizeof(mesh));
     options.verbose = 0;
     options.refine = 1;
-    options.use_offcenters = 0;
     options.protect_acute_corners = 0;
     options.acute_mode = TM_ACUTE_MODE_SHELL;
     options.min_angle_deg = 20.0;
@@ -1296,9 +1238,6 @@ int main(void)
         failures += 1;
     }
     if (!test_top_cluster_pslg_refined()) {
-        failures += 1;
-    }
-    if (!test_top_cluster_pslg_offcenters()) {
         failures += 1;
     }
     if (!test_warped_disc64_domain_pslg_refined()) {

@@ -1,42 +1,46 @@
 # DTCC Mesher
 
-MIT Licensed Two-Dimensional Quality Mesh Generator.
+DTCC Mesher provides a free/open-source two-dimensional quality mesh
+generator. The purpose is to provide constrained Delaunay
+triangulation and quality refinement capabilities similar to Triangle,
+while relying on an independent implementation based on published
+algorithms and reports rather than on Triangle source code.
+
+This project is part of the
+[Digital Twin Platform (DTCC Platform)](https://github.com/dtcc-platform/)
+developed at the
+[Digital Twin Cities Centre](https://dtcc.chalmers.se/)
+supported by Sweden's Innovation Agency Vinnova under Grant No. 2019-421 00041.
+
+![City mesh](docs/images/city_mesh.png)
+
+## Documentation
+
+The public interfaces are:
+
+- the Python package in `python/dtcc_mesher/`
+- the public C headers in `include/dtcc_mesher/`
+- the native CLI built from `cli/main.c`
+
+The main Python entry points are `mesh(...)`, `Domain`, `Coverage`, `CoverageGraph`,
+`MeshingOptions`, and `Mesh`.
 
 ## Features
 
 - point-set Delaunay triangulation from `.pts` files
-- constrained meshing for `.pslg` domains
-- quality refinement with midpoint segment splitting and Steiner insertion
-- optional off-centers
-- acute-corner protection
-- SVG, CSV, and text reports
-- C library
-- native CLI
-- Python package with NumPy arrays
-- CMake package export and `pkg-config` metadata
+- constrained meshing for `.pslg`, `Coverage`, and `CoverageGraph` inputs
+- standard constrained-Delaunay refinement with midpoint segment splitting and
+  circumcenter Steiner insertion
+- acute-corner protection for small PSLG angles
+- C library, native CLI, and Python package
 
 ## Limitations
 
-- `.pts` inputs are not refined
-- refinement applies to `.pslg` inputs
+- `.pts` inputs are triangulated but not refined
 
-## Build
+## Installation
 
-```sh
-cmake -S . -B build
-cmake --build build
-ctest --test-dir build --output-on-failure
-cmake --install build --prefix ./install
-```
-
-Developer shortcuts:
-
-```sh
-make
-make test
-```
-
-## Python Install
+### Python
 
 ```sh
 python -m pip install .
@@ -44,246 +48,70 @@ python -m pip install ".[plot]"
 python -m pip install ".[dev]"
 ```
 
-## Native CLI
-
-The native CLI is the C executable built by CMake:
+### Native build
 
 ```sh
-./build/dtcc_mesher tests/cases/square_center5.pts build/out/square_center5
+cmake -S . -B build
+cmake --build build
+cmake --install build --prefix ./install
+```
+
+### Makefile shortcuts
+
+- `make` - configure and build
+- `make test` - run the test suite
+
+## Basic usage
+
+Native CLI:
+
+```sh
 ./build/dtcc_mesher tests/cases/square_hole_domain.pslg build/out/square_hole
-./build/dtcc_mesher --off-centers tests/cases/city_tight_downtown_domain.pslg build/out/city_tight
 ```
 
-Interface:
-
-```text
-dtcc_mesher [options] input.(pts|pslg) outbase
-```
-
-Options:
-
-- `-h`, `--help`
-- `--version`
-- `-v`, `--verbose`
-- `--refine`, `--no-refine`
-- `--off-centers`, `--no-off-centers`
-- `--acute-protection`
-- `--simple-acute-protection`
-- `--shell-acute-protection`
-- `--no-acute-protection`
-- `--min-angle deg`
-- `--max-area area`
-- `--protect-angle deg`
-- `--max-refine-steps n`
-- `--max-protection-levels n`
-
-Outputs:
-
-- `outbase.tri`
-- `outbase.svg`
-- `outbase.metrics.csv`
-- `outbase.summary.txt`
-
-## C API
-
-Public headers:
-
-- `dtcc_mesher/dtcc_mesher.h`
-- `dtcc_mesher/dtcc_mesher_io.h`
-- `dtcc_mesher/dtcc_mesher_version.h`
-
-```c
-#include <stdio.h>
-#include "dtcc_mesher/dtcc_mesher.h"
-
-int main(void) {
-    dtcc_mesher_point points[] = {
-        {0.0, 0.0},
-        {1.0, 0.0},
-        {1.0, 1.0},
-        {0.0, 1.0},
-        {0.5, 0.5}
-    };
-    dtcc_mesher_domain domain = {
-        .points = points,
-        .num_points = 5,
-        .segments = NULL,
-        .num_segments = 0,
-        .holes = NULL,
-        .num_holes = 0
-    };
-    dtcc_mesher_options options;
-    dtcc_mesher_mesh mesh;
-    dtcc_mesher_quality_summary summary;
-    dtcc_mesher_error error;
-
-    dtcc_mesher_options_init(&options);
-    if (dtcc_mesher_generate(&domain, &options, &mesh, &error) != DTCC_MESHER_STATUS_OK) {
-        fprintf(stderr, "%s\n", error.message);
-        return 1;
-    }
-
-    dtcc_mesher_analyze_mesh(&mesh, &summary, &error);
-    printf("triangles=%zu min_angle=%.2f\n", summary.triangle_count, summary.min_angle_deg_min);
-    dtcc_mesher_mesh_free(&mesh);
-    return 0;
-}
-```
-
-## Python
-
-```python
-import dtcc_mesher as dm
-
-mesh = dm.mesh(
-    dm.Domain(
-        points=[
-            (0.0, 0.0),
-            (1.0, 0.0),
-            (1.0, 1.0),
-            (0.0, 1.0),
-            (0.5, 0.5),
-        ]
-    )
-)
-
-print(mesh.points.shape)
-print(mesh.triangles.shape)
-print(mesh.summary.min_angle_deg_min)
-mesh.write_svg("mesh.svg")
-```
+Python:
 
 ```python
 import dtcc_mesher as dm
 
 domain = dm.read_domain("tests/cases/square_hole_domain.pslg")
-mesh = dm.mesh(
-    domain,
-    options=dm.MeshingOptions(
-        min_angle=25.0,
-        max_edge_length=0.75,
-    ),
-)
+mesh = dm.mesh(domain, options=dm.MeshingOptions(min_angle=25.0, max_edge_length=0.75))
 mesh.write_quality_summary("square_hole.summary.txt")
-mesh.show(title="square_hole_domain")
 ```
 
-```python
-import dtcc_mesher as dm
-from shapely.geometry import box
+For plotting support, install `".[plot]"`. For the complete CLI flags, run
+`./build/dtcc_mesher --help` or `python -m dtcc_mesher --help`.
 
-mesh = dm.mesh(
-    dm.Coverage(
-        [box(0.0, 0.0, 0.5, 1.0), box(0.5, 0.0, 1.0, 1.0)],
-        markers=[10, 20],
-    ),
-    options=dm.MeshingOptions(max_edge_length=0.25, refine=False),
-)
-```
+## Algorithmic basis and provenance
 
-Public Python API:
+DTCC Mesher does not vendor Triangle meshing source code. The only copied third-party
+source file in this repository is `src/third_party/predicates.c`, which is Jonathan
+Richard Shewchuk's public-domain robust geometric predicates implementation. The mesher
+core is instead guided by published work on incremental Delaunay triangulation,
+constrained Delaunay refinement, robust predicates, and mesh generation for domains
+with small angles.
 
-- `dm.mesh(...)` is the single entry point for meshing
-- `dm.Domain(...)` and `dm.Domain.from_loops(...)` are for PSLG / point-segment-hole inputs
-- `dm.Coverage(...)` is for polygon coverage inputs with region markers
-- `dm.CoverageGraph(...)` is the low-level coverage graph input when you already have noded segments and region markers
-- `dm.read_domain(...)` reads `.pts` / `.pslg` files into a `Domain`
-- `dm.MeshingOptions(...)` carries the meshing controls
-- `dm.Mesh` carries `points`, `triangles`, `segments`, `summary`, and optional `markers`
-- `dm.plot_mesh(...)`, `dm.plot_mesh_with_summary(...)`, and `dm.show_mesh(...)` are plotting helpers
+## References
 
-Recommended usage pattern:
+- Adrian Bowyer, [Computing Dirichlet Tessellations](https://doi.org/10.1093/comjnl/24.2.162), 1981.
+- David F. Watson, [Computing the n-dimensional Delaunay Tessellation with Application to Voronoi Polytopes](https://doi.org/10.1093/comjnl/24.2.167), 1981.
+- Jim Ruppert, [A Delaunay Refinement Algorithm for Quality 2-Dimensional Mesh Generation](https://doi.org/10.1006/jagm.1995.1021), 1995.
+- Jonathan Richard Shewchuk, [Triangle: Engineering a 2D Quality Mesh Generator and Delaunay Triangulator](https://www.cs.cmu.edu/~quake/tripaper/triangle0.html), 1996.
+- Jonathan Richard Shewchuk, [Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates](https://www.cs.cmu.edu/~quake/robust.html), 1997.
+- Jonathan Richard Shewchuk, [Delaunay Refinement Mesh Generation](https://www.cs.cmu.edu/~quake-papers/delaunay-refinement.pdf), 1997.
+- Jonathan Richard Shewchuk, [Mesh Generation for Domains with Small Angles](https://people.eecs.berkeley.edu/~jrs/papers/angle.pdf), 2000.
+- Jonathan Richard Shewchuk, [Delaunay Refinement Algorithms for Triangular Mesh Generation](https://doi.org/10.1016/S0925-7721(01)00047-5), 2002.
 
-1. Build or read a `Domain` / `Coverage`
-2. Create `MeshingOptions` only when you want non-default controls
-3. Call `mesh(...)`
+## Authors (in order of appearance)
 
-`MeshingOptions` fields:
+* [Anders Logg](http://anders.logg.org), with the help of Codex et al.
 
-- `min_angle`
-- `max_edge_length`:
-  preferred global size control, interpreted as the maximum target constrained-edge
-  length / nominal mesh spacing in the input plane. Use `None` for unrestricted size.
-- `max_area`:
-  lower-level area cap for backends that refine by area; most callers should prefer
-  `max_edge_length`
-- `refine`
-- `off_centers`:
-  reserved; standard refinement uses circumcenters for bad triangles and midpoint
-  splits for encroached constrained segments
-- `verbose`
-- `acute_protection`
-- `protect_angle`
-  defaults to protecting PSLG corners below `60` degrees when acute protection is enabled
-- `max_refine_steps`
-- `max_protection_levels`
+## License
 
-## Python CLI
+This project is licensed under the
+[MIT license](https://opensource.org/licenses/MIT).
 
-The Python package also exposes a lightweight CLI:
+## Community guidelines
 
-```sh
-python -m dtcc_mesher tests/cases/square_hole_domain.pslg build/out/square_hole_py
-```
-
-Options:
-
-- `-h`, `--help`
-- `--min-angle deg`
-- `--max-area area`
-- `--max-edge-length length`
-- `--no-refine`
-- `--off-centers`
-- `--acute-protection {none,simple,shell}`
-
-Plotting requires:
-
-```sh
-python -m pip install ".[plot]"
-```
-
-## Demos
-
-- `demos/c/basic_generate.c`
-- `demos/c/quality_report.c`
-- `demos/python/basic_generate.py`
-- `demos/python/plot_mesh.py`
-- `demos/cli/README.md`
-
-Interactive plotting demo:
-
-```sh
-python demos/python/plot_mesh.py
-python demos/python/plot_mesh.py --list
-python demos/python/plot_mesh.py city_tight_downtown_domain --off-centers
-```
-
-## Tests
-
-```sh
-cmake -S . -B build
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-```sh
-python -m pip install ".[dev]"
-python -m pytest tests/python
-```
-
-## Layout
-
-```text
-include/dtcc_mesher/   public C headers
-src/api/               public C API wrappers
-src/core/              internal mesh generator sources
-src/third_party/       public-domain predicates
-cli/                   native CLI
-python/                pybind11 binding and Python package
-demos/                 C, Python, and CLI demos
-tests/                 algorithmic, API, CLI, and Python tests
-```
-
-## Third-Party Code
-
-DTCC Mesher is MIT licensed. `src/third_party/predicates.c` is copied verbatim from Jonathan Richard Shewchuk's public-domain robust predicates implementation. All other project files are part of DTCC Mesher.
+Comments, contributions, and questions are welcome. Please engage with
+us through Issues, Pull Requests, and Discussions on our GitHub page.

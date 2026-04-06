@@ -27,7 +27,6 @@ def main() -> int:
         action="store_true",
         help="Disable quality refinement. Leave refinement enabled when no global size cap is set.",
     )
-    parser.add_argument("--off-centers", action="store_true", help="Use off-centers for bad-triangle insertion")
     parser.add_argument(
         "--acute-protection",
         choices=("none", "simple", "shell"),
@@ -43,7 +42,6 @@ def main() -> int:
             max_area=args.max_area,
             max_edge_length=args.max_edge_length,
             refine=not args.no_refine,
-            off_centers=args.off_centers,
             acute_protection=args.acute_protection,
         ),
     )

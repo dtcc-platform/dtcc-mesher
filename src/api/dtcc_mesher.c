@@ -360,7 +360,6 @@ void dtcc_mesher_options_init(dtcc_mesher_options *options)
     options->max_area = 0.0;
     options->max_edge_length = 0.0;
     options->enable_refinement = 1;
-    options->use_offcenters = 0;
     options->verbose = 0;
     options->enable_acute_protection = 1;
     options->acute_protection_mode = DTCC_MESHER_ACUTE_PROTECTION_SHELL;
@@ -445,7 +444,6 @@ dtcc_mesher_status dtcc_mesher_generate(
 
     build_options.verbose = options->verbose;
     build_options.refine = options->enable_refinement || options->max_area > 0.0;
-    build_options.use_offcenters = options->use_offcenters;
     build_options.protect_acute_corners = options->enable_acute_protection;
     build_options.acute_mode = options->acute_protection_mode == DTCC_MESHER_ACUTE_PROTECTION_SIMPLE ?
         TM_ACUTE_MODE_SIMPLE :

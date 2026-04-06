@@ -59,7 +59,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("case", nargs="?", help="Case name, file name, or menu selection")
     parser.add_argument("--list", action="store_true", help="List available runnable cases and exit")
     parser.add_argument("--show-points", action="store_true", help="Draw point markers")
-    parser.add_argument("--off-centers", action="store_true", help="Use off-centers")
     parser.add_argument("--no-refine", action="store_true", help="Disable refinement")
     parser.add_argument(
         "--acute-protection",
@@ -154,7 +153,6 @@ def main() -> int:
             options=dm.MeshingOptions(
                 min_angle=args.min_angle,
                 refine=not args.no_refine,
-                off_centers=args.off_centers,
                 acute_protection=args.acute_protection,
                 verbose=not args.quiet,
             ),

@@ -155,7 +155,6 @@ static void dtcc_mesher_options_from_python(
     py::object max_area_object,
     py::object max_edge_length_object,
     bool enable_refinement,
-    bool use_offcenters,
     bool verbose,
     int acute_mode,
     py::object protect_angle_object,
@@ -172,7 +171,6 @@ static void dtcc_mesher_options_from_python(
         options->max_edge_length = py::cast<double>(max_edge_length_object);
     }
     options->enable_refinement = enable_refinement ? 1 : 0;
-    options->use_offcenters = use_offcenters ? 1 : 0;
     options->verbose = verbose ? 1 : 0;
     options->enable_acute_protection = acute_mode != 0 ? 1 : 0;
     options->acute_protection_mode = acute_mode == 1 ? DTCC_MESHER_ACUTE_PROTECTION_SIMPLE : DTCC_MESHER_ACUTE_PROTECTION_SHELL;
@@ -189,7 +187,6 @@ static TMBuildOptions dtcc_mesher_build_options_from_public(const dtcc_mesher_op
 
     build_options.verbose = options.verbose;
     build_options.refine = options.enable_refinement || options.max_area > 0.0;
-    build_options.use_offcenters = options.use_offcenters;
     build_options.protect_acute_corners = options.enable_acute_protection;
     build_options.acute_mode = options.acute_protection_mode == DTCC_MESHER_ACUTE_PROTECTION_SIMPLE ?
         TM_ACUTE_MODE_SIMPLE :
@@ -357,7 +354,6 @@ static py::dict dtcc_mesher_generate_raw(
     py::object max_area_object,
     py::object max_edge_length_object,
     bool enable_refinement,
-    bool use_offcenters,
     bool verbose,
     int acute_mode,
     py::object protect_angle_object,
@@ -409,7 +405,6 @@ static py::dict dtcc_mesher_generate_raw(
         max_area_object,
         max_edge_length_object,
         enable_refinement,
-        use_offcenters,
         verbose,
         acute_mode,
         protect_angle_object,
@@ -447,7 +442,6 @@ static py::dict dtcc_mesher_generate_coverage_raw(
     py::object max_area_object,
     py::object max_edge_length_object,
     bool enable_refinement,
-    bool use_offcenters,
     bool verbose,
     int acute_mode,
     py::object protect_angle_object,
@@ -497,7 +491,6 @@ static py::dict dtcc_mesher_generate_coverage_raw(
         max_area_object,
         max_edge_length_object,
         enable_refinement,
-        use_offcenters,
         verbose,
         acute_mode,
         protect_angle_object,
@@ -626,7 +619,6 @@ PYBIND11_MODULE(_core, m)
         py::arg("max_area") = py::none(),
         py::arg("max_edge_length") = py::none(),
         py::arg("enable_refinement") = true,
-        py::arg("use_offcenters") = false,
         py::arg("verbose") = false,
         py::arg("acute_mode") = 2,
         py::arg("protect_angle_deg") = py::none(),
@@ -644,7 +636,6 @@ PYBIND11_MODULE(_core, m)
         py::arg("max_area") = py::none(),
         py::arg("max_edge_length") = py::none(),
         py::arg("enable_refinement") = true,
-        py::arg("use_offcenters") = false,
         py::arg("verbose") = false,
         py::arg("acute_mode") = 2,
         py::arg("protect_angle_deg") = py::none(),

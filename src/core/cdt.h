@@ -12,7 +12,6 @@ typedef enum {
 typedef struct {
     int verbose;
     int refine;
-    int use_offcenters;
     int protect_acute_corners;
     TMAcuteProtectionMode acute_mode;
     double min_angle_deg;

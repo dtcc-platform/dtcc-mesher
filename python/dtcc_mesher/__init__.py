@@ -56,7 +56,6 @@ class MeshingOptions:
     max_area: float | None = None
     max_edge_length: float | None = None
     refine: bool = True
-    off_centers: bool = False
     verbose: bool = False
     acute_protection: Literal["none", "simple", "shell"] = "shell"
     protect_angle: float | None = None
@@ -422,7 +421,6 @@ def _domain_mesh(domain: Domain, options: MeshingOptions) -> Mesh:
         options.max_area,
         options.max_edge_length,
         options.refine,
-        options.off_centers,
         options.verbose,
         _acute_mode_value(options.acute_protection),
         options.protect_angle,
@@ -442,7 +440,6 @@ def _coverage_graph_mesh(graph: CoverageGraph, options: MeshingOptions) -> Mesh:
         options.max_area,
         options.max_edge_length,
         options.refine,
-        options.off_centers,
         options.verbose,
         _acute_mode_value(options.acute_protection),
         options.protect_angle,

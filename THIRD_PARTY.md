@@ -9,4 +9,7 @@
 
 The overall project license is MIT.
 
-All other project files were written from scratch for DTCC Mesher.
+No Triangle meshing source files are vendored in this repository.
+
+All other project files were written from scratch for DTCC Mesher. Published algorithm
+references used to guide the implementation are documented in `README.md`.

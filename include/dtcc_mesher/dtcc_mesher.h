@@ -50,7 +50,6 @@ typedef struct {
     double max_area;
     double max_edge_length;
     int enable_refinement;
-    int use_offcenters;
     int verbose;
     int enable_acute_protection;
     dtcc_mesher_acute_protection_mode acute_protection_mode;
