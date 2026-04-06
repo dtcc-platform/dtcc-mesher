@@ -2417,6 +2417,44 @@ static int tm_find_encroached_segment_for_point(const TMMesh *mesh, const double
     return found;
 }
 
+static int tm_find_protected_encroached_segment_for_point(
+    const TMMesh *mesh,
+    const double point[2],
+    size_t *out_segment_index
+)
+{
+    size_t segment_index;
+    int found = 0;
+    double best_length_sq = 0.0;
+
+    for (segment_index = 0; segment_index < mesh->segment_count; ++segment_index) {
+        const TMSegment *segment = &mesh->segments[segment_index];
+        double length_sq;
+
+        if (!segment->live || !segment->is_protected) {
+            continue;
+        }
+
+        length_sq = tm_segment_length_squared(mesh, segment->v[0], segment->v[1]);
+        if (tm_point_encroaches_segment(
+                point,
+                mesh->points[segment->v[0]].xy,
+                mesh->points[segment->v[1]].xy,
+                length_sq
+            )) {
+            if (!found ||
+                length_sq < best_length_sq ||
+                (length_sq == best_length_sq && segment_index < *out_segment_index)) {
+                found = 1;
+                best_length_sq = length_sq;
+                *out_segment_index = segment_index;
+            }
+        }
+    }
+
+    return found;
+}
+
 static int tm_find_bad_triangle(
     const TMMesh *mesh,
     double beta,
@@ -3722,6 +3760,7 @@ static TMStatus tm_refine_quality_mesh(TMMesh *mesh, const TMBuildOptions *optio
             size_t circumcenter_segment_index = 0;
             size_t split_segment_index = 0;
             int circumcenter_encroaches = 0;
+            int circumcenter_encroaches_protected = 0;
             int split_segment = 0;
             int point_index = -1;
 
@@ -3742,6 +3781,25 @@ static TMStatus tm_refine_quality_mesh(TMMesh *mesh, const TMBuildOptions *optio
             if (circumcenter_encroaches) {
                 split_segment = 1;
                 split_segment_index = circumcenter_segment_index;
+            }
+
+            if (!split_segment) {
+                circumcenter_encroaches_protected = tm_find_protected_encroached_segment_for_point(
+                    mesh,
+                    circumcenter,
+                    &circumcenter_segment_index
+                );
+                if (circumcenter_encroaches_protected) {
+                    tm_verbose_log(
+                        options,
+                        "refine step %zu: skip bad triangle %zu because its circumcenter encroaches protected segment %d-%d",
+                        steps + 1,
+                        triangle_index,
+                        mesh->segments[circumcenter_segment_index].v[0],
+                        mesh->segments[circumcenter_segment_index].v[1]
+                    );
+                    continue;
+                }
             }
 
             if (!split_segment &&

@@ -25,6 +25,26 @@ def _mesh_domain_file(path: Path, **option_kwargs) -> dm.Mesh:
     )
 
 
+def _triangle_aspect_ratio_max(mesh: dm.Mesh) -> float:
+    if len(mesh.triangles) == 0:
+        return 0.0
+
+    triangles = mesh.points[mesh.triangles]
+    e0 = triangles[:, 2] - triangles[:, 1]
+    e1 = triangles[:, 0] - triangles[:, 2]
+    e2 = triangles[:, 1] - triangles[:, 0]
+    l0 = np.linalg.norm(e0, axis=1)
+    l1 = np.linalg.norm(e1, axis=1)
+    l2 = np.linalg.norm(e2, axis=1)
+    areas = 0.5 * np.abs(
+        (triangles[:, 1, 0] - triangles[:, 0, 0]) * (triangles[:, 2, 1] - triangles[:, 0, 1])
+        - (triangles[:, 1, 1] - triangles[:, 0, 1]) * (triangles[:, 2, 0] - triangles[:, 0, 0])
+    )
+    safe_areas = np.where(areas > 0.0, areas, 1.0)
+    aspect_ratios = np.maximum.reduce([l0, l1, l2]) * (l0 + l1 + l2) / ((4.0 * np.sqrt(3.0)) * safe_areas)
+    return float(aspect_ratios.max())
+
+
 def test_mesh_points():
     mesh = dm.mesh(
         dm.Domain(
@@ -197,22 +217,7 @@ def test_mesh_coverage_preserves_closed_outer_boundary_sampling():
     bottom_vertices = np.count_nonzero(np.abs(mesh.points[:, 1]) < 1e-9)
     assert bottom_vertices > 10
 
-    aspect_ratios = []
-    for triangle in mesh.triangles:
-        points = mesh.points[triangle]
-        edge_lengths = np.array(
-            [
-                np.linalg.norm(points[1] - points[0]),
-                np.linalg.norm(points[2] - points[1]),
-                np.linalg.norm(points[0] - points[2]),
-            ]
-        )
-        longest = float(edge_lengths.max())
-        area = float(abs(np.cross(points[1] - points[0], points[2] - points[0])) / 2.0)
-        altitude = (2.0 * area / longest) if longest > 0.0 else 0.0
-        aspect_ratios.append(longest / altitude if altitude > 0.0 else np.inf)
-
-    assert max(aspect_ratios) < 20.0
+    assert _triangle_aspect_ratio_max(mesh) < 20.0
 
 
 def test_mesh_coverage_matches_domain_for_large_coordinate_acute_polygon():
@@ -421,6 +426,24 @@ def test_mesh_graph_case34_unrestricted_completes_with_good_quality():
     assert mesh.summary.triangle_count > 7500
     assert mesh.summary.radius_edge_ratio_max < 1.6
     assert mesh.summary.count_min_angle_lt_20 <= 2
+
+
+def test_mesh_graph_case1_unrestricted_limits_acute_corner_slivers():
+    with np.load(_case_path("stockholm_case1_graph_unrestricted.npz")) as data:
+        graph = dm.CoverageGraph(
+            points=data["points"],
+            segments=data["segments"],
+            region_points=data["region_points"],
+            region_markers=data["region_markers"],
+        )
+
+    mesh = dm.mesh(
+        graph,
+        options=dm.MeshingOptions(min_angle=25.0, refine=True, max_refine_steps=20000),
+    )
+
+    assert mesh.summary.triangle_count > 4000
+    assert _triangle_aspect_ratio_max(mesh) < 4.25
 
 
 def test_plot_mesh_with_summary_smoke():
