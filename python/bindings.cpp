@@ -539,6 +539,40 @@ static py::dict dtcc_mesher_generate_coverage_raw(
     }
 }
 
+static void dtcc_mesher_validate_segment_graph_raw(
+    const py::array_t<double, py::array::c_style | py::array::forcecast> &points_array,
+    const py::array_t<std::uint32_t, py::array::c_style | py::array::forcecast> &segments_array
+)
+{
+    std::vector<TMPoint> points;
+    std::vector<TMSegment> segments;
+    TMStatus status;
+
+    if (points_array.ndim() != 2 || points_array.shape(1) != 2) {
+        throw std::invalid_argument("points must have shape (N, 2)");
+    }
+    if (segments_array.ndim() != 2 || segments_array.shape(1) != 2) {
+        throw std::invalid_argument("segments must have shape (M, 2)");
+    }
+
+    points = dtcc_mesher_internal_points_from_array(points_array);
+    segments = dtcc_mesher_internal_segments_from_array(segments_array);
+    status = tm_validate_segment_graph(
+        points.empty() ? nullptr : points.data(),
+        points.size(),
+        segments.empty() ? nullptr : segments.data(),
+        segments.size()
+    );
+    if (status != TM_OK) {
+        const char *detail = tm_last_pslg_error_detail();
+        throw std::runtime_error(
+            detail != nullptr && detail[0] != '\0'
+                ? detail
+                : tm_internal_status_string(status)
+        );
+    }
+}
+
 static py::dict dtcc_mesher_analyze_raw(
     const py::array_t<double, py::array::c_style | py::array::forcecast> &points_array,
     const py::array_t<std::uint32_t, py::array::c_style | py::array::forcecast> &triangles_array,
@@ -641,6 +675,12 @@ PYBIND11_MODULE(_core, m)
         py::arg("protect_angle_deg") = py::none(),
         py::arg("max_refinement_steps") = 0,
         py::arg("max_protection_levels") = 6
+    );
+    m.def(
+        "_validate_segment_graph_raw",
+        &dtcc_mesher_validate_segment_graph_raw,
+        py::arg("points"),
+        py::arg("segments")
     );
     m.def(
         "_analyze_raw",

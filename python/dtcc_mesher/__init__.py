@@ -25,6 +25,7 @@ __all__ = [
     "plot_mesh_with_summary",
     "read_domain",
     "show_mesh",
+    "validate_coverage_graph",
 ]
 
 __version__ = "0.1.0"
@@ -447,6 +448,10 @@ def _coverage_graph_mesh(graph: CoverageGraph, options: MeshingOptions) -> Mesh:
         options.max_protection_levels,
     )
     return _mesh_from_raw(raw)
+
+
+def validate_coverage_graph(graph: CoverageGraph) -> None:
+    _core._validate_segment_graph_raw(graph.points, graph.segments)
 
 
 def mesh(

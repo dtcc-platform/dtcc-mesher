@@ -336,6 +336,73 @@ def test_mesh_graph_reports_t_junctions_in_coverage_input():
         )
 
 
+def test_validate_coverage_graph_reports_t_junctions():
+    points = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+            [0.5, 0.0],
+            [0.5, 0.5],
+        ],
+        dtype=np.float64,
+    )
+    segments = np.array(
+        [
+            [0, 1],
+            [1, 2],
+            [2, 3],
+            [3, 0],
+            [4, 5],
+        ],
+        dtype=np.uint32,
+    )
+    graph = dm.CoverageGraph(
+        points=points,
+        segments=segments,
+        region_points=np.array([[0.25, 0.25]], dtype=np.float64),
+        region_markers=np.array([1], dtype=np.int32),
+    )
+
+    with pytest.raises(RuntimeError, match="endpoint lies on another segment interior"):
+        dm.validate_coverage_graph(graph)
+
+
+def test_validate_coverage_graph_accepts_valid_partition():
+    points = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+            [0.5, 0.0],
+            [0.5, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    segments = np.array(
+        [
+            [0, 4],
+            [4, 1],
+            [1, 2],
+            [2, 5],
+            [5, 3],
+            [3, 0],
+            [4, 5],
+        ],
+        dtype=np.uint32,
+    )
+    graph = dm.CoverageGraph(
+        points=points,
+        segments=segments,
+        region_points=np.array([[0.25, 0.5], [0.75, 0.5]], dtype=np.float64),
+        region_markers=np.array([10, 20], dtype=np.int32),
+    )
+
+    dm.validate_coverage_graph(graph)
+
+
 def test_mesh_graph_handles_stockholm_case15_recovery_regression():
     with np.load(_case_path("stockholm_case15_graph_maxh10.npz")) as data:
         graph = dm.CoverageGraph(
