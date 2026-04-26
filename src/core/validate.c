@@ -54,6 +54,9 @@ TMStatus tm_validate_mesh(const TMMesh *mesh, int check_delaunay, TMValidationRe
     out_report->encroached_segment_errors = 0;
     out_report->bad_triangle_errors = 0;
     out_report->exempt_triangle_count = 0;
+    out_report->first_encroached_segment = (size_t) -1;
+    out_report->first_encroaching_point = -1;
+    out_report->first_bad_triangle = (size_t) -1;
 
     for (tri_index = 0; tri_index < mesh->triangle_count; ++tri_index) {
         const TMTriangle *triangle = &mesh->triangles[tri_index];
@@ -202,28 +205,108 @@ static double tm_distance_squared(const double a[2], const double b[2])
     return dx * dx + dy * dy;
 }
 
-static int tm_segment_is_encroached(const TMMesh *mesh, size_t segment_index)
+static int tm_point_encroaches_segment(
+    const TMMesh *mesh,
+    const TMSegment *segment,
+    int point_index
+)
 {
-    const TMSegment *segment = &mesh->segments[segment_index];
     const double *a = mesh->points[segment->v[0]].xy;
     const double *b = mesh->points[segment->v[1]].xy;
-    size_t point_index;
+    const double *p;
+    double length_sq;
+    double tolerance;
+    double dot;
 
-    for (point_index = 0; point_index < mesh->point_count; ++point_index) {
-        const double *p;
-        double dot;
+    if (point_index < 0 || (size_t) point_index >= mesh->point_count) {
+        return 0;
+    }
+    if (point_index == segment->v[0] || point_index == segment->v[1]) {
+        return 0;
+    }
+    if (mesh->points[point_index].incident_triangle < 0) {
+        return 0;
+    }
 
-        if ((int) point_index == segment->v[0] || (int) point_index == segment->v[1]) {
-            continue;
-        }
-        if (mesh->points[point_index].incident_triangle < 0) {
-            continue;
-        }
+    p = mesh->points[point_index].xy;
+    length_sq = tm_distance_squared(a, b);
+    tolerance = 1e-12 * ((length_sq > 1.0) ? length_sq : 1.0);
+    dot = (p[0] - a[0]) * (p[0] - b[0]) + (p[1] - a[1]) * (p[1] - b[1]);
+    return dot < -tolerance;
+}
 
-        p = mesh->points[point_index].xy;
-        dot = (p[0] - a[0]) * (p[0] - b[0]) + (p[1] - a[1]) * (p[1] - b[1]);
-        if (dot < 0.0) {
+static int tm_segment_triangle_edge(
+    const TMMesh *mesh,
+    const TMSegment *segment,
+    int *out_triangle_index,
+    int *out_edge
+)
+{
+    size_t tri_index;
+
+    for (tri_index = 0; tri_index < mesh->triangle_count; ++tri_index) {
+        int edge = tm_find_edge_in_triangle(
+            &mesh->triangles[tri_index],
+            segment->v[0],
+            segment->v[1]
+        );
+
+        if (edge >= 0) {
+            if (out_triangle_index != NULL) {
+                *out_triangle_index = (int) tri_index;
+            }
+            if (out_edge != NULL) {
+                *out_edge = edge;
+            }
             return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int tm_segment_is_encroached(
+    const TMMesh *mesh,
+    size_t segment_index,
+    int *out_point_index
+)
+{
+    const TMSegment *segment = &mesh->segments[segment_index];
+    int triangle_index;
+    int edge;
+
+    if (out_point_index != NULL) {
+        *out_point_index = -1;
+    }
+    if (!tm_segment_triangle_edge(mesh, segment, &triangle_index, &edge)) {
+        return 0;
+    }
+
+    /* Only vertices on triangulated side(s) are visible to the constrained segment. */
+    if (tm_point_encroaches_segment(mesh, segment, mesh->triangles[triangle_index].v[edge])) {
+        if (out_point_index != NULL) {
+            *out_point_index = mesh->triangles[triangle_index].v[edge];
+        }
+        return 1;
+    }
+
+    {
+        int neighbor_index = mesh->triangles[triangle_index].nbr[edge];
+
+        if (neighbor_index >= 0 && (size_t) neighbor_index < mesh->triangle_count) {
+            int neighbor_edge = tm_find_edge_in_triangle(
+                &mesh->triangles[neighbor_index],
+                segment->v[0],
+                segment->v[1]
+            );
+
+            if (neighbor_edge >= 0 &&
+                tm_point_encroaches_segment(mesh, segment, mesh->triangles[neighbor_index].v[neighbor_edge])) {
+                if (out_point_index != NULL) {
+                    *out_point_index = mesh->triangles[neighbor_index].v[neighbor_edge];
+                }
+                return 1;
+            }
         }
     }
 
@@ -275,13 +358,19 @@ TMStatus tm_validate_quality_mesh(const TMMesh *mesh, double min_angle_deg, TMVa
     beta = 1.0 / (2.0 * sin(min_angle_deg * tm_pi / 180.0));
 
     for (segment_index = 0; segment_index < mesh->segment_count; ++segment_index) {
+        int encroaching_point = -1;
+
         if (!mesh->segments[segment_index].live) {
             continue;
         }
         if (mesh->segments[segment_index].is_protected) {
             continue;
         }
-        if (tm_segment_is_encroached(mesh, segment_index)) {
+        if (tm_segment_is_encroached(mesh, segment_index, &encroaching_point)) {
+            if (out_report->first_encroached_segment == (size_t) -1) {
+                out_report->first_encroached_segment = segment_index;
+                out_report->first_encroaching_point = encroaching_point;
+            }
             out_report->encroached_segment_errors += 1;
         }
     }
@@ -292,6 +381,9 @@ TMStatus tm_validate_quality_mesh(const TMMesh *mesh, double min_angle_deg, TMVa
             continue;
         }
         if (tm_triangle_is_bad(mesh, tri_index, beta)) {
+            if (out_report->first_bad_triangle == (size_t) -1) {
+                out_report->first_bad_triangle = tri_index;
+            }
             out_report->bad_triangle_errors += 1;
         }
     }

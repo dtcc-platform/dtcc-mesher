@@ -12,20 +12,11 @@
 #include "predicates.h"
 
 typedef struct {
-    int v[3];
-    int dead;
-} TMWorkingTriangle;
-
-typedef struct {
     int a;
     int b;
-    int active;
-} TMEdge;
-
-typedef struct {
-    int a;
-    int b;
-} TMEdgePair;
+    int triangle_index;
+    int edge;
+} TMEdgeRef;
 
 typedef struct {
     int triangle_index;
@@ -33,6 +24,24 @@ typedef struct {
 } TMFlipCandidate;
 
 static int tm_initialized = 0;
+
+static TMStatus tm_insert_point_in_triangle_with_original_index(
+    TMMesh *mesh,
+    int triangle_index,
+    const double point[2],
+    int original_index,
+    TMVertexKind kind,
+    int *out_point_index
+);
+static TMStatus tm_insert_point_on_edge_with_original_index(
+    TMMesh *mesh,
+    int triangle_index,
+    int edge,
+    const double point[2],
+    int original_index,
+    TMVertexKind kind,
+    int *out_point_index
+);
 
 static TMStatus tm_grow_array(void **buffer, size_t *capacity, size_t elem_size, size_t min_capacity)
 {
@@ -216,6 +225,26 @@ static int tm_compare_triangles(const void *lhs, const void *rhs)
     return 0;
 }
 
+static int tm_compare_edge_refs(const void *lhs, const void *rhs)
+{
+    const TMEdgeRef *a = (const TMEdgeRef *) lhs;
+    const TMEdgeRef *b = (const TMEdgeRef *) rhs;
+
+    if (a->a < b->a) {
+        return -1;
+    }
+    if (a->a > b->a) {
+        return 1;
+    }
+    if (a->b < b->b) {
+        return -1;
+    }
+    if (a->b > b->b) {
+        return 1;
+    }
+    return 0;
+}
+
 static void tm_init_point(TMPoint *point, double x, double y, int original_index, TMVertexKind kind)
 {
     point->xy[0] = x;
@@ -257,13 +286,6 @@ static int tm_make_triangle(TMTriangle *triangle, int a, int b, int c, const TMP
     tm_reset_triangle(triangle);
     tm_normalize_triangle_ccw(triangle, points);
     return tm_orient_value(&points[triangle->v[0]], &points[triangle->v[1]], &points[triangle->v[2]]) != 0.0;
-}
-
-static int tm_triangle_uses_supervertex(const TMWorkingTriangle *triangle, size_t real_point_count)
-{
-    return triangle->v[0] >= (int) real_point_count ||
-           triangle->v[1] >= (int) real_point_count ||
-           triangle->v[2] >= (int) real_point_count;
 }
 
 static void tm_compute_supertriangle(const TMPoint *points, size_t count, TMPoint supertriangle[3])
@@ -325,71 +347,6 @@ static int tm_all_collinear(const TMPoint *points, size_t count)
     }
 
     return 1;
-}
-
-static TMStatus tm_append_working_triangle(
-    TMWorkingTriangle **triangles,
-    size_t *triangle_count,
-    size_t *triangle_capacity,
-    int a,
-    int b,
-    int c,
-    const TMPoint *points
-)
-{
-    TMWorkingTriangle triangle;
-    TMStatus status;
-
-    triangle.v[0] = a;
-    triangle.v[1] = b;
-    triangle.v[2] = c;
-    triangle.dead = 0;
-
-    if (tm_orient_value(&points[a], &points[b], &points[c]) < 0.0) {
-        tm_swap_int(&triangle.v[1], &triangle.v[2]);
-    }
-
-    if (tm_orient_value(&points[triangle.v[0]], &points[triangle.v[1]], &points[triangle.v[2]]) == 0.0) {
-        return TM_OK;
-    }
-
-    status = tm_grow_array((void **) triangles, triangle_capacity, sizeof(**triangles), *triangle_count + 1);
-    if (status != TM_OK) {
-        return status;
-    }
-
-    (*triangles)[*triangle_count] = triangle;
-    *triangle_count += 1;
-    return TM_OK;
-}
-
-static TMStatus tm_add_boundary_edge(TMEdge **edges, size_t *edge_count, size_t *edge_capacity, int a, int b)
-{
-    TMStatus status;
-    int lo;
-    int hi;
-    size_t i;
-
-    lo = (a < b) ? a : b;
-    hi = (a < b) ? b : a;
-
-    for (i = 0; i < *edge_count; ++i) {
-        if ((*edges)[i].active && (*edges)[i].a == lo && (*edges)[i].b == hi) {
-            (*edges)[i].active = 0;
-            return TM_OK;
-        }
-    }
-
-    status = tm_grow_array((void **) edges, edge_capacity, sizeof(**edges), *edge_count + 1);
-    if (status != TM_OK) {
-        return status;
-    }
-
-    (*edges)[*edge_count].a = lo;
-    (*edges)[*edge_count].b = hi;
-    (*edges)[*edge_count].active = 1;
-    *edge_count += 1;
-    return TM_OK;
 }
 
 static TMStatus tm_append_point(TMMesh *mesh, const double point[2], int original_index, TMVertexKind kind, int *out_index)
@@ -687,139 +644,6 @@ static void tm_assign_incident_triangle(TMMesh *mesh, int point_index, int trian
     mesh->points[point_index].incident_triangle = triangle_index;
 }
 
-static void tm_compact_triangles(TMMesh *mesh)
-{
-    size_t read_index;
-    size_t write_index = 0;
-
-    for (read_index = 0; read_index < mesh->triangle_count; ++read_index) {
-        if (!mesh->triangles[read_index].dead) {
-            if (write_index != read_index) {
-                mesh->triangles[write_index] = mesh->triangles[read_index];
-            }
-            mesh->triangles[write_index].dead = 0;
-            write_index += 1;
-        }
-    }
-
-    mesh->triangle_count = write_index;
-}
-
-static TMStatus tm_append_edge_pair(TMEdgePair **pairs, size_t *pair_count, size_t *pair_capacity, int a, int b)
-{
-    TMStatus status;
-    int lo = (a < b) ? a : b;
-    int hi = (a < b) ? b : a;
-    size_t i;
-
-    for (i = 0; i < *pair_count; ++i) {
-        if ((*pairs)[i].a == lo && (*pairs)[i].b == hi) {
-            return TM_OK;
-        }
-    }
-
-    status = tm_grow_array((void **) pairs, pair_capacity, sizeof(**pairs), *pair_count + 1);
-    if (status != TM_OK) {
-        return status;
-    }
-
-    (*pairs)[*pair_count].a = lo;
-    (*pairs)[*pair_count].b = hi;
-    *pair_count += 1;
-    return TM_OK;
-}
-
-static void tm_remove_edge_pair(TMEdgePair *pairs, size_t *pair_count, int a, int b)
-{
-    int lo = (a < b) ? a : b;
-    int hi = (a < b) ? b : a;
-    size_t i;
-
-    for (i = 0; i < *pair_count; ++i) {
-        if (pairs[i].a == lo && pairs[i].b == hi) {
-            pairs[i] = pairs[*pair_count - 1];
-            *pair_count -= 1;
-            return;
-        }
-    }
-}
-
-static TMStatus tm_collect_constrained_edge_pairs(const TMMesh *mesh, TMEdgePair **out_pairs, size_t *out_pair_count)
-{
-    TMEdgePair *pairs = NULL;
-    size_t pair_count = 0;
-    size_t pair_capacity = 0;
-    size_t tri_index;
-    TMStatus status = TM_OK;
-
-    *out_pairs = NULL;
-    *out_pair_count = 0;
-
-    for (tri_index = 0; tri_index < mesh->triangle_count; ++tri_index) {
-        int edge;
-
-        for (edge = 0; edge < 3; ++edge) {
-            int a;
-            int b;
-
-            if (!mesh->triangles[tri_index].constrained[edge]) {
-                continue;
-            }
-
-            tm_triangle_edge_vertices(&mesh->triangles[tri_index], edge, &a, &b);
-            status = tm_append_edge_pair(&pairs, &pair_count, &pair_capacity, a, b);
-            if (status != TM_OK) {
-                free(pairs);
-                return status;
-            }
-        }
-    }
-
-    *out_pairs = pairs;
-    *out_pair_count = pair_count;
-    return TM_OK;
-}
-
-static void tm_clear_constraints(TMMesh *mesh)
-{
-    size_t tri_index;
-
-    for (tri_index = 0; tri_index < mesh->triangle_count; ++tri_index) {
-        int edge;
-
-        for (edge = 0; edge < 3; ++edge) {
-            mesh->triangles[tri_index].constrained[edge] = 0;
-        }
-    }
-}
-
-static TMStatus tm_apply_constraint_pairs(TMMesh *mesh, const TMEdgePair *pairs, size_t pair_count)
-{
-    size_t pair_index;
-
-    tm_clear_constraints(mesh);
-
-    for (pair_index = 0; pair_index < pair_count; ++pair_index) {
-        size_t tri_index;
-        int found = 0;
-
-        for (tri_index = 0; tri_index < mesh->triangle_count; ++tri_index) {
-            int edge = tm_find_edge_in_triangle(&mesh->triangles[tri_index], pairs[pair_index].a, pairs[pair_index].b);
-
-            if (edge >= 0) {
-                mesh->triangles[tri_index].constrained[edge] = 1;
-                found = 1;
-            }
-        }
-
-        if (!found) {
-            return TM_ERR_INVALID_MESH;
-        }
-    }
-
-    return TM_OK;
-}
-
 static int tm_point_inside_triangle(const TMMesh *mesh, const TMTriangle *triangle, const double point[2], int *out_edge)
 {
     int edge;
@@ -952,18 +776,18 @@ TMStatus tm_read_points_file(const char *path, TMPoint **out_points, size_t *out
 TMStatus tm_build_mesh(const TMPoint *input_points, size_t input_count, TMMesh *out_mesh)
 {
     TMPoint *working_points = NULL;
-    TMWorkingTriangle *triangles = NULL;
-    size_t triangle_count = 0;
-    size_t triangle_capacity = 0;
+    TMMesh working_mesh;
     size_t final_count = 0;
     size_t i;
     TMStatus status = TM_OK;
+    int start_triangle = 0;
 
     if (out_mesh == NULL || input_points == NULL) {
         return TM_ERR_INTERNAL;
     }
 
     memset(out_mesh, 0, sizeof(*out_mesh));
+    memset(&working_mesh, 0, sizeof(working_mesh));
 
     if (input_count < 3) {
         return TM_ERR_TOO_FEW_POINTS;
@@ -993,94 +817,80 @@ TMStatus tm_build_mesh(const TMPoint *input_points, size_t input_count, TMMesh *
 
     tm_compute_supertriangle(working_points, input_count, &working_points[input_count]);
 
-    status = tm_append_working_triangle(
-        &triangles,
-        &triangle_count,
-        &triangle_capacity,
-        (int) input_count,
-        (int) input_count + 1,
-        (int) input_count + 2,
-        working_points
-    );
+    for (i = 0; i < 3; ++i) {
+        int point_index;
+
+        status = tm_append_point(
+            &working_mesh,
+            working_points[input_count + i].xy,
+            -1,
+            TM_VERTEX_SUPER,
+            &point_index
+        );
+        if (status != TM_OK) {
+            goto cleanup;
+        }
+    }
+
+    {
+        TMTriangle supertriangle;
+
+        if (!tm_make_triangle(&supertriangle, 0, 1, 2, working_mesh.points)) {
+            status = TM_ERR_INTERNAL;
+            goto cleanup;
+        }
+        status = tm_append_triangle(&working_mesh, &supertriangle);
+    }
     if (status != TM_OK) {
         goto cleanup;
     }
 
     for (i = 0; i < input_count; ++i) {
-        TMEdge *edges = NULL;
-        size_t edge_count = 0;
-        size_t edge_capacity = 0;
-        size_t tri_index;
-        size_t bad_count = 0;
+        TMLocation location;
+        int inserted_point = -1;
 
-        for (tri_index = 0; tri_index < triangle_count; ++tri_index) {
-            TMWorkingTriangle *triangle = &triangles[tri_index];
-            double in_value;
-
-            if (triangle->dead) {
-                continue;
-            }
-
-            in_value = tm_incircle_value(
-                &working_points[triangle->v[0]],
-                &working_points[triangle->v[1]],
-                &working_points[triangle->v[2]],
-                &working_points[i]
-            );
-
-            if (in_value >= 0.0) {
-                triangle->dead = 1;
-                bad_count += 1;
-
-                status = tm_add_boundary_edge(&edges, &edge_count, &edge_capacity, triangle->v[0], triangle->v[1]);
-                if (status != TM_OK) {
-                    free(edges);
-                    goto cleanup;
-                }
-                status = tm_add_boundary_edge(&edges, &edge_count, &edge_capacity, triangle->v[1], triangle->v[2]);
-                if (status != TM_OK) {
-                    free(edges);
-                    goto cleanup;
-                }
-                status = tm_add_boundary_edge(&edges, &edge_count, &edge_capacity, triangle->v[2], triangle->v[0]);
-                if (status != TM_OK) {
-                    free(edges);
-                    goto cleanup;
-                }
-            }
-        }
-
-        if (bad_count == 0) {
-            free(edges);
-            status = TM_ERR_INTERNAL;
+        status = tm_locate_point(&working_mesh, working_points[i].xy, start_triangle, &location);
+        if (status != TM_OK) {
             goto cleanup;
         }
 
-        for (tri_index = 0; tri_index < edge_count; ++tri_index) {
-            if (!edges[tri_index].active) {
-                continue;
-            }
-
-            status = tm_append_working_triangle(
-                &triangles,
-                &triangle_count,
-                &triangle_capacity,
-                edges[tri_index].a,
-                edges[tri_index].b,
-                (int) i,
-                working_points
+        if (location.on_edge) {
+            status = tm_insert_point_on_edge_with_original_index(
+                &working_mesh,
+                location.triangle,
+                location.edge,
+                working_points[i].xy,
+                working_points[i].original_index,
+                TM_VERTEX_INPUT,
+                &inserted_point
             );
-            if (status != TM_OK) {
-                free(edges);
-                goto cleanup;
-            }
+        } else {
+            status = tm_insert_point_in_triangle_with_original_index(
+                &working_mesh,
+                location.triangle,
+                working_points[i].xy,
+                working_points[i].original_index,
+                TM_VERTEX_INPUT,
+                &inserted_point
+            );
+        }
+        if (status != TM_OK) {
+            goto cleanup;
         }
 
-        free(edges);
+        if (inserted_point >= 0 &&
+            (size_t) inserted_point < working_mesh.point_count &&
+            working_mesh.points[inserted_point].incident_triangle >= 0) {
+            start_triangle = working_mesh.points[inserted_point].incident_triangle;
+        } else {
+            start_triangle = location.triangle;
+        }
     }
 
-    for (i = 0; i < triangle_count; ++i) {
-        if (!triangles[i].dead && !tm_triangle_uses_supervertex(&triangles[i], input_count)) {
+    for (i = 0; i < working_mesh.triangle_count; ++i) {
+        if (working_mesh.triangles[i].v[0] >= 3 &&
+            working_mesh.triangles[i].v[1] >= 3 &&
+            working_mesh.triangles[i].v[2] >= 3) {
             final_count += 1;
         }
     }
@@ -1118,17 +928,20 @@ TMStatus tm_build_mesh(const TMPoint *input_points, size_t input_count, TMMesh *
     out_mesh->triangle_capacity = final_count;
     out_mesh->triangle_count = 0;
 
-    for (i = 0; i < triangle_count; ++i) {
-        if (!triangles[i].dead && !tm_triangle_uses_supervertex(&triangles[i], input_count)) {
+    for (i = 0; i < working_mesh.triangle_count; ++i) {
+        if (working_mesh.triangles[i].v[0] >= 3 &&
+            working_mesh.triangles[i].v[1] >= 3 &&
+            working_mesh.triangles[i].v[2] >= 3) {
             TMTriangle triangle;
+            int a = working_mesh.points[working_mesh.triangles[i].v[0]].original_index;
+            int b = working_mesh.points[working_mesh.triangles[i].v[1]].original_index;
+            int c = working_mesh.points[working_mesh.triangles[i].v[2]].original_index;
 
-            if (!tm_make_triangle(
-                    &triangle,
-                    working_points[triangles[i].v[0]].original_index,
-                    working_points[triangles[i].v[1]].original_index,
-                    working_points[triangles[i].v[2]].original_index,
-                    out_mesh->points
-                )) {
+            if (a < 0 || b < 0 || c < 0 ||
+                (size_t) a >= input_count ||
+                (size_t) b >= input_count ||
+                (size_t) c >= input_count ||
+                !tm_make_triangle(&triangle, a, b, c, out_mesh->points)) {
                 status = TM_ERR_INTERNAL;
                 goto cleanup;
             }
@@ -1145,7 +958,7 @@ TMStatus tm_build_mesh(const TMPoint *input_points, size_t input_count, TMMesh *
     }
 
 cleanup:
-    free(triangles);
+    tm_free_mesh(&working_mesh);
     free(working_points);
 
     if (status != TM_OK) {
@@ -1157,10 +970,21 @@ cleanup:
 
 TMStatus tm_rebuild_topology(TMMesh *mesh)
 {
+    TMEdgeRef *edge_refs = NULL;
+    size_t edge_ref_count = 0;
     size_t tri_index;
+    TMStatus status = TM_OK;
 
     if (mesh == NULL || mesh->points == NULL || mesh->triangles == NULL) {
         return TM_ERR_INTERNAL;
+    }
+
+    if (mesh->triangle_count > SIZE_MAX / (3 * sizeof(*edge_refs))) {
+        return TM_ERR_ALLOC;
+    }
+    edge_refs = (TMEdgeRef *) malloc(3 * mesh->triangle_count * sizeof(*edge_refs));
+    if (edge_refs == NULL && mesh->triangle_count != 0) {
+        return TM_ERR_ALLOC;
     }
 
     for (tri_index = 0; tri_index < mesh->triangle_count; ++tri_index) {
@@ -1169,33 +993,47 @@ TMStatus tm_rebuild_topology(TMMesh *mesh)
         tm_normalize_triangle_ccw(&mesh->triangles[tri_index], mesh->points);
         mesh->triangles[tri_index].dead = 0;
         for (edge = 0; edge < 3; ++edge) {
+            int a;
+            int b;
+
             mesh->triangles[tri_index].nbr[edge] = -1;
+            tm_triangle_edge_vertices(&mesh->triangles[tri_index], edge, &a, &b);
+            edge_refs[edge_ref_count].a = (a < b) ? a : b;
+            edge_refs[edge_ref_count].b = (a < b) ? b : a;
+            edge_refs[edge_ref_count].triangle_index = (int) tri_index;
+            edge_refs[edge_ref_count].edge = edge;
+            edge_ref_count += 1;
         }
     }
 
-    for (tri_index = 0; tri_index < mesh->triangle_count; ++tri_index) {
-        size_t other_index;
+    qsort(edge_refs, edge_ref_count, sizeof(*edge_refs), tm_compare_edge_refs);
 
-        for (other_index = tri_index + 1; other_index < mesh->triangle_count; ++other_index) {
-            int edge;
+    for (tri_index = 0; tri_index < edge_ref_count;) {
+        size_t group_end = tri_index + 1;
 
-            for (edge = 0; edge < 3; ++edge) {
-                int a;
-                int b;
-                int other_edge;
-
-                if (mesh->triangles[tri_index].nbr[edge] != -1) {
-                    continue;
-                }
-
-                tm_triangle_edge_vertices(&mesh->triangles[tri_index], edge, &a, &b);
-                other_edge = tm_find_edge_in_triangle(&mesh->triangles[other_index], a, b);
-                if (other_edge >= 0) {
-                    mesh->triangles[tri_index].nbr[edge] = (int) other_index;
-                    mesh->triangles[other_index].nbr[other_edge] = (int) tri_index;
-                }
-            }
+        while (group_end < edge_ref_count &&
+               edge_refs[group_end].a == edge_refs[tri_index].a &&
+               edge_refs[group_end].b == edge_refs[tri_index].b) {
+            group_end += 1;
         }
+
+        if (group_end - tri_index == 2) {
+            TMEdgeRef first = edge_refs[tri_index];
+            TMEdgeRef second = edge_refs[tri_index + 1];
+
+            mesh->triangles[first.triangle_index].nbr[first.edge] = second.triangle_index;
+            mesh->triangles[second.triangle_index].nbr[second.edge] = first.triangle_index;
+        } else if (group_end - tri_index > 2) {
+            status = TM_ERR_INVALID_MESH;
+            break;
+        }
+
+        tri_index = group_end;
+    }
+
+    if (status != TM_OK) {
+        free(edge_refs);
+        return status;
     }
 
     for (tri_index = 0; tri_index < mesh->point_count; ++tri_index) {
@@ -1209,6 +1047,7 @@ TMStatus tm_rebuild_topology(TMMesh *mesh)
             int point_index = mesh->triangles[tri_index].v[vertex];
 
             if (point_index < 0 || (size_t) point_index >= mesh->point_count) {
+                free(edge_refs);
                 return TM_ERR_INVALID_MESH;
             }
             if (mesh->points[point_index].incident_triangle == -1) {
@@ -1217,6 +1056,7 @@ TMStatus tm_rebuild_topology(TMMesh *mesh)
         }
     }
 
+    free(edge_refs);
     return TM_OK;
 }
 
@@ -1721,10 +1561,11 @@ TMStatus tm_flip_edge(TMMesh *mesh, int triangle_index, int edge)
     return TM_OK;
 }
 
-TMStatus tm_insert_point_in_triangle(
+static TMStatus tm_insert_point_in_triangle_with_original_index(
     TMMesh *mesh,
     int triangle_index,
     const double point[2],
+    int original_index,
     TMVertexKind kind,
     int *out_point_index
 )
@@ -1791,7 +1632,7 @@ TMStatus tm_insert_point_in_triangle(
         return status;
     }
 
-    status = tm_append_point(mesh, point, -1, kind, &point_index);
+    status = tm_append_point(mesh, point, original_index, kind, &point_index);
     if (status != TM_OK) {
         return status;
     }
@@ -1866,11 +1707,30 @@ TMStatus tm_insert_point_in_triangle(
     return TM_OK;
 }
 
-TMStatus tm_insert_point_on_edge(
+TMStatus tm_insert_point_in_triangle(
+    TMMesh *mesh,
+    int triangle_index,
+    const double point[2],
+    TMVertexKind kind,
+    int *out_point_index
+)
+{
+    return tm_insert_point_in_triangle_with_original_index(
+        mesh,
+        triangle_index,
+        point,
+        -1,
+        kind,
+        out_point_index
+    );
+}
+
+static TMStatus tm_insert_point_on_edge_with_original_index(
     TMMesh *mesh,
     int triangle_index,
     int edge,
     const double point[2],
+    int original_index,
     TMVertexKind kind,
     int *out_point_index
 )
@@ -1981,7 +1841,7 @@ TMStatus tm_insert_point_on_edge(
         return status;
     }
 
-    status = tm_append_point(mesh, point, -1, kind, &point_index);
+    status = tm_append_point(mesh, point, original_index, kind, &point_index);
     if (status != TM_OK) {
         return status;
     }
@@ -2109,6 +1969,26 @@ TMStatus tm_insert_point_on_edge(
         *out_point_index = point_index;
     }
     return TM_OK;
+}
+
+TMStatus tm_insert_point_on_edge(
+    TMMesh *mesh,
+    int triangle_index,
+    int edge,
+    const double point[2],
+    TMVertexKind kind,
+    int *out_point_index
+)
+{
+    return tm_insert_point_on_edge_with_original_index(
+        mesh,
+        triangle_index,
+        edge,
+        point,
+        -1,
+        kind,
+        out_point_index
+    );
 }
 
 void tm_free_points(TMPoint *points)

@@ -15,6 +15,9 @@ typedef struct {
     size_t encroached_segment_errors;
     size_t bad_triangle_errors;
     size_t exempt_triangle_count;
+    size_t first_encroached_segment;
+    int first_encroaching_point;
+    size_t first_bad_triangle;
 } TMValidationReport;
 
 TMStatus tm_validate_mesh(const TMMesh *mesh, int check_delaunay, TMValidationReport *out_report);
