@@ -116,7 +116,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include <sys/time.h>
 
 /* On some machines, the exact arithmetic routines might be defeated by the  */
 /*   use of internal extended precision floating-point registers.  Sometimes */
@@ -486,6 +485,10 @@ REAL *e;
 }
 */
 
+/* The random()-based test helpers below are POSIX-only and unused by the   */
+/*   mesher; exclude them on Windows, where random() is unavailable.        */
+#ifndef _WIN32
+
 /*****************************************************************************/
 /*                                                                           */
 /*  doublerand()   Generate a double with random 53-bit significand and a    */
@@ -620,6 +623,8 @@ float uniformfloatrand()
   result = (float) ((a - 1073741824) >> 6);
   return result;
 }
+
+#endif /* !_WIN32 */
 
 /*****************************************************************************/
 /*                                                                           */
