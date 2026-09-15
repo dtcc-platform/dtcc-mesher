@@ -28,9 +28,31 @@ dev = [
 
 [tool.scikit-build]
 minimum-version = "0.10"
+wheel.packages = ["python/dtcc_mesher"]
+# Reuse native build trees between editable installs.
+build-dir = "build/{wheel_tag}"
 
 [tool.scikit-build.cmake.define]
 DTCC_MESHER_BUILD_PYTHON = "ON"
 DTCC_MESHER_BUILD_CLI = "ON"
 DTCC_MESHER_BUILD_TESTS = "OFF"
 DTCC_MESHER_BUILD_DEMOS = "OFF"
+
+[tool.uv]
+# Rebuild the editable extension and CLI when native build inputs change.
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "CMakeLists.txt" },
+  { file = "cmake/**/*" },
+  { file = "src/**/*" },
+  { file = "include/**/*" },
+  { file = "python/bindings.cpp" },
+  { file = "cli/**/*" },
+]
+
+[dependency-groups]
+# Installed by default with `uv sync`; retain the published dev extra.
+dev = ["dtcc-mesher[dev]"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]

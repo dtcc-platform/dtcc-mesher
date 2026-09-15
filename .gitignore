@@ -17,3 +17,5 @@ install/
 venv/
 
 tests/tmp/
+
+dist/

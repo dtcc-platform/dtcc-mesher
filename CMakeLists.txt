@@ -242,7 +242,9 @@ install(
   DESTINATION ${CMAKE_INSTALL_DATADIR}/dtcc_mesher
 )
 
-if(DTCC_MESHER_BUILD_PYTHON)
+# scikit-build packages Python sources (and maps them for editable installs).
+# Direct CMake installs still need to copy the Python package.
+if(DTCC_MESHER_BUILD_PYTHON AND NOT SKBUILD)
   install(
     DIRECTORY python/dtcc_mesher/
     DESTINATION ${DTCC_MESHER_PYTHON_INSTALL_DIR}

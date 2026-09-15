@@ -42,11 +42,45 @@ The main Python entry points are `mesh(...)`, `Domain`, `Coverage`, `CoverageGra
 
 ### Python
 
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and a C/C++17
+compiler, then run:
+
 ```sh
-python -m pip install .
-python -m pip install ".[plot]"
-python -m pip install ".[dev]"
+git clone https://github.com/dtcc-platform/dtcc-mesher.git
+cd dtcc-mesher
+uv sync
 ```
+
+`uv sync` creates `.venv`, installs the dependencies in `uv.lock` (including
+pytest and plotting tools), and builds the package in editable mode. CMake and
+Ninja are supplied by the build backend when needed.
+
+Run Python commands with `uv run`, for example `uv run python my_script.py`.
+Python edits take effect immediately. After changing C/C++ sources, headers, or
+CMake files, `uv sync` (or `uv run`) rebuilds the native extension and CLI.
+Build trees are kept in `build/` for incremental compilation.
+
+| Task | Command |
+| --- | --- |
+| Set up or update the environment | `uv sync` |
+| Run Python tests | `uv run pytest` |
+| Build a source distribution and wheel | `uv build` |
+| Add a dependency | `uv add <package>` |
+| Upgrade a locked dependency | `uv lock --upgrade-package <package>` |
+
+Commit `uv.lock` with dependency changes in `pyproject.toml`. CI uses
+`uv sync --locked` to reject an outdated lockfile.
+
+To depend on Mesher from another uv project:
+
+```sh
+uv add "dtcc-mesher @ git+https://github.com/dtcc-platform/dtcc-mesher.git"
+# Or use a local checkout:
+uv add --editable ../dtcc-mesher
+```
+
+For a minimal environment without development tools, use `uv sync --no-dev`;
+add `--extra plot` for plotting support.
 
 ### Native build
 
@@ -59,7 +93,9 @@ cmake --install build --prefix ./install
 ### Makefile shortcuts
 
 - `make` - configure and build
-- `make test` - run the test suite
+- `make test` - run the native test suite
+- `make install` - set up the Python environment with `uv sync`
+- `make test-python` - run the Python test suite
 
 ## Basic usage
 
@@ -79,8 +115,8 @@ mesh = dm.mesh(domain, options=dm.MeshingOptions(min_angle=25.0, max_edge_length
 mesh.write_quality_summary("square_hole.summary.txt")
 ```
 
-For plotting support, install `".[plot]"`. For the complete CLI flags, run
-`./build/dtcc_mesher --help` or `python -m dtcc_mesher --help`.
+For the complete CLI flags, run `./build/dtcc_mesher --help` or
+`uv run python -m dtcc_mesher --help`.
 
 ## Algorithmic basis and provenance
 
