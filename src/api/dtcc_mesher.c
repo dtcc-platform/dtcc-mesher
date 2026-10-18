@@ -213,7 +213,7 @@ static void dtcc_mesher_populate_public_mesh_metadata(
     }
 }
 
-static dtcc_mesher_status dtcc_mesher_copy_internal_mesh(
+dtcc_mesher_status dtcc_mesher_api_copy_internal_mesh(
     const TMMesh *internal_mesh,
     dtcc_mesher_mesh *out_mesh,
     dtcc_mesher_error *out_error
@@ -249,8 +249,14 @@ static dtcc_mesher_status dtcc_mesher_copy_internal_mesh(
             );
             return DTCC_MESHER_STATUS_NO_MEMORY;
         }
+        out_mesh->quality_exempt = (unsigned char *) calloc(internal_mesh->triangle_count, sizeof(unsigned char));
+        if (out_mesh->quality_exempt == NULL) {
+            dtcc_mesher_mesh_free(out_mesh);
+            return DTCC_MESHER_STATUS_NO_MEMORY;
+        }
         out_mesh->num_triangles = internal_mesh->triangle_count;
         for (i = 0; i < internal_mesh->triangle_count; ++i) {
+            out_mesh->quality_exempt[i] = (unsigned char) tm_triangle_is_quality_exempt(internal_mesh, (int) i);
             out_mesh->triangles[i * 3 + 0] = (uint32_t) internal_mesh->triangles[i].v[0];
             out_mesh->triangles[i * 3 + 1] = (uint32_t) internal_mesh->triangles[i].v[1];
             out_mesh->triangles[i * 3 + 2] = (uint32_t) internal_mesh->triangles[i].v[2];
@@ -366,6 +372,7 @@ void dtcc_mesher_options_init(dtcc_mesher_options *options)
     options->protect_angle_deg = 0.0;
     options->max_refinement_steps = 0;
     options->max_protection_levels = 6;
+    options->reuse_acute_corners = 0;
 }
 
 const char *dtcc_mesher_status_string(dtcc_mesher_status status)
@@ -454,6 +461,7 @@ dtcc_mesher_status dtcc_mesher_generate(
     build_options.protect_angle_deg = options->protect_angle_deg;
     build_options.max_refinement_steps = options->max_refinement_steps;
     build_options.max_protection_levels = options->max_protection_levels;
+    build_options.reuse_acute_corners = options->reuse_acute_corners;
 
     if (domain->num_segments == 0) {
         status = dtcc_mesher_copy_points_to_internal(domain, &points, out_error);
@@ -480,7 +488,7 @@ dtcc_mesher_status dtcc_mesher_generate(
         return status;
     }
 
-    status = dtcc_mesher_copy_internal_mesh(&internal_mesh, out_mesh, out_error);
+    status = dtcc_mesher_api_copy_internal_mesh(&internal_mesh, out_mesh, out_error);
     tm_free_mesh(&internal_mesh);
     return status;
 }
@@ -493,9 +501,11 @@ void dtcc_mesher_mesh_free(dtcc_mesher_mesh *mesh)
 
     free(mesh->points);
     free(mesh->triangles);
+    free(mesh->quality_exempt);
     free(mesh->segments);
     mesh->points = NULL;
     mesh->triangles = NULL;
+    mesh->quality_exempt = NULL;
     mesh->segments = NULL;
     mesh->num_points = 0;
     mesh->num_triangles = 0;

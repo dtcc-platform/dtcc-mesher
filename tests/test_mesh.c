@@ -182,6 +182,7 @@ static int load_pslg_mesh_with_options(
     options.protect_angle_deg = 0.0;
     options.max_refinement_steps = 0;
     options.max_protection_levels = 6;
+    options.reuse_acute_corners = 0;
 
     if (!build_case_path(case_path, sizeof(case_path), name, ".pslg")) {
         fprintf(stderr, "case path too long for %s\n", name);
@@ -1162,6 +1163,7 @@ static int test_acute_wedge_needs_protection(void)
     options.protect_angle_deg = 0.0;
     options.max_refinement_steps = 0;
     options.max_protection_levels = 6;
+    options.reuse_acute_corners = 0;
 
     if (!build_case_path(case_path, sizeof(case_path), "acute_wedge_5deg", ".pslg")) {
         fprintf(stderr, "case path too long for acute_wedge_5deg\n");

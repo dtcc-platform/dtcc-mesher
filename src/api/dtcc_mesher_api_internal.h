@@ -12,4 +12,6 @@ void dtcc_mesher_api_clear_error(dtcc_mesher_error *error);
 void dtcc_mesher_api_set_error(dtcc_mesher_error *error, dtcc_mesher_status status, const char *format, ...);
 void dtcc_mesher_api_set_error_va(dtcc_mesher_error *error, dtcc_mesher_status status, const char *format, va_list args);
 
+dtcc_mesher_status dtcc_mesher_api_copy_internal_mesh(const TMMesh *mesh, dtcc_mesher_mesh *output, dtcc_mesher_error *error);
+
 #endif

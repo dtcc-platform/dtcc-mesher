@@ -151,3 +151,5 @@ This project is licensed under the
 
 Comments, contributions, and questions are welcome. Please engage with
 us through Issues, Pull Requests, and Discussions on our GitHub page.
+
+See [bounded mesh improvement](docs/improve.md) for explicit zero/one-point shape optimization.

@@ -7,6 +7,7 @@
 #include <pybind11/pybind11.h>
 
 #include "dtcc_mesher/dtcc_mesher.h"
+#include "dtcc_mesher/dtcc_mesher_improve.h"
 #include "dtcc_mesher/dtcc_mesher_version.h"
 extern "C" {
 #include "cdt.h"
@@ -159,7 +160,8 @@ static void dtcc_mesher_options_from_python(
     int acute_mode,
     py::object protect_angle_object,
     std::size_t max_refinement_steps,
-    std::size_t max_protection_levels
+    std::size_t max_protection_levels,
+    bool reuse_acute_corners
 )
 {
     dtcc_mesher_options_init(options);
@@ -176,6 +178,7 @@ static void dtcc_mesher_options_from_python(
     options->acute_protection_mode = acute_mode == 1 ? DTCC_MESHER_ACUTE_PROTECTION_SIMPLE : DTCC_MESHER_ACUTE_PROTECTION_SHELL;
     options->max_refinement_steps = max_refinement_steps;
     options->max_protection_levels = max_protection_levels;
+    options->reuse_acute_corners = reuse_acute_corners ? 1 : 0;
     if (!protect_angle_object.is_none()) {
         options->protect_angle_deg = py::cast<double>(protect_angle_object);
     }
@@ -197,6 +200,7 @@ static TMBuildOptions dtcc_mesher_build_options_from_public(const dtcc_mesher_op
     build_options.protect_angle_deg = options.protect_angle_deg;
     build_options.max_refinement_steps = options.max_refinement_steps;
     build_options.max_protection_levels = options.max_protection_levels;
+    build_options.reuse_acute_corners = options.reuse_acute_corners;
     return build_options;
 }
 
@@ -313,6 +317,10 @@ static py::dict dtcc_mesher_internal_mesh_result(const TMMesh &mesh, const int *
     if (triangle_markers != nullptr) {
         result["markers"] = dtcc_mesher_markers_to_numpy(triangle_markers, mesh.triangle_count);
     }
+    py::array_t<bool> exempt_array(static_cast<py::ssize_t>(mesh.triangle_count));
+    auto exempt_view = exempt_array.mutable_unchecked<1>();
+    for (size_t i = 0; i < mesh.triangle_count; ++i) exempt_view(i) = tm_triangle_is_quality_exempt(&mesh, static_cast<int>(i));
+    result["quality_exempt"] = exempt_array;
     result["summary"] = dtcc_mesher_summary_to_dict(summary);
     return result;
 }
@@ -358,7 +366,8 @@ static py::dict dtcc_mesher_generate_raw(
     int acute_mode,
     py::object protect_angle_object,
     std::size_t max_refinement_steps,
-    std::size_t max_protection_levels
+    std::size_t max_protection_levels,
+    bool reuse_acute_corners
 )
 {
     std::vector<dtcc_mesher_point> points;
@@ -409,7 +418,8 @@ static py::dict dtcc_mesher_generate_raw(
         acute_mode,
         protect_angle_object,
         max_refinement_steps,
-        max_protection_levels
+        max_protection_levels,
+        reuse_acute_corners
     );
 
     status = dtcc_mesher_generate(&domain, &options, &mesh, &error);
@@ -427,6 +437,10 @@ static py::dict dtcc_mesher_generate_raw(
     result["points"] = dtcc_mesher_points_to_numpy(mesh);
     result["triangles"] = dtcc_mesher_triangles_to_numpy(mesh);
     result["segments"] = dtcc_mesher_segments_to_numpy(mesh);
+    py::array_t<bool> exempt_array(static_cast<py::ssize_t>(mesh.num_triangles));
+    auto exempt_view = exempt_array.mutable_unchecked<1>();
+    for (size_t i = 0; i < mesh.num_triangles; ++i) exempt_view(i) = mesh.quality_exempt[i] != 0;
+    result["quality_exempt"] = exempt_array;
     result["summary"] = dtcc_mesher_summary_to_dict(summary);
 
     dtcc_mesher_mesh_free(&mesh);
@@ -446,7 +460,8 @@ static py::dict dtcc_mesher_generate_coverage_raw(
     int acute_mode,
     py::object protect_angle_object,
     std::size_t max_refinement_steps,
-    std::size_t max_protection_levels
+    std::size_t max_protection_levels,
+    bool reuse_acute_corners
 )
 {
     std::vector<TMPoint> points;
@@ -495,7 +510,8 @@ static py::dict dtcc_mesher_generate_coverage_raw(
         acute_mode,
         protect_angle_object,
         max_refinement_steps,
-        max_protection_levels
+        max_protection_levels,
+        reuse_acute_corners
     );
     build_options = dtcc_mesher_build_options_from_public(public_options);
 
@@ -638,8 +654,72 @@ static py::dict dtcc_mesher_analyze_raw(
     return dtcc_mesher_summary_to_dict(summary);
 }
 
+
+static py::dict shape_score_dict(const dtcc_mesher_shape_score &s)
+{
+    py::dict d;
+    d["penalty"]=s.penalty;d["minimum_q"]=s.minimum_q;
+    d["poor_5_count"]=s.poor_5_count;d["poor_5_area"]=s.poor_5_area;
+    d["poor_10_count"]=s.poor_10_count;d["poor_10_area"]=s.poor_10_area;
+    return d;
+}
+
+static py::dict improve_raw(
+    const py::array_t<double, py::array::c_style | py::array::forcecast> &p,
+    const py::array_t<std::uint32_t, py::array::c_style | py::array::forcecast> &t,
+    const py::array_t<std::uint32_t, py::array::c_style | py::array::forcecast> &s,
+    unsigned int budget, bool interior,
+    const py::array_t<size_t, py::array::c_style | py::array::forcecast> &allowed)
+{
+    if(p.ndim()!=2 || p.shape(1)!=2 || t.ndim()!=2 || t.shape(1)!=3 ||
+       s.ndim()!=2 || s.shape(1)!=2 || allowed.ndim()!=1)
+        throw std::invalid_argument("invalid planar mesh array shapes");
+    auto points=dtcc_mesher_points_from_array(p);
+    auto segments=dtcc_mesher_segments_from_array(s);
+    dtcc_mesher_mesh input{};dtcc_mesher_improvement result{};dtcc_mesher_error error{};
+    input.points=points.data();input.num_points=points.size();
+    input.segments=segments.data();input.num_segments=segments.size();
+    input.triangles=const_cast<uint32_t *>(t.data());input.num_triangles=static_cast<size_t>(t.shape(0));
+    input.num_input_points=points.size();
+    dtcc_mesher_status status;
+    {py::gil_scoped_release release;status=dtcc_mesher_improve(&input,budget,interior,allowed.data(),static_cast<size_t>(allowed.size()),&result,&error);}
+    if(status==DTCC_MESHER_STATUS_NO_MEMORY) throw std::bad_alloc();
+    if(status==DTCC_MESHER_STATUS_INVALID_ARGUMENT || status==DTCC_MESHER_STATUS_GEOMETRY)
+        throw std::invalid_argument(error.message);
+    if(status!=DTCC_MESHER_STATUS_OK) throw std::runtime_error(error.message);
+    try {
+        py::dict raw;
+        raw["points"]=dtcc_mesher_points_to_numpy(result.mesh);
+        raw["triangles"]=dtcc_mesher_triangles_to_numpy(result.mesh);
+        raw["segments"]=dtcc_mesher_segments_to_numpy(result.mesh);
+        raw["summary"]=dtcc_mesher_summary_to_dict(result.quality_after);
+        py::array_t<size_t> parents(static_cast<py::ssize_t>(result.mesh.num_segments));
+        for(size_t i=0;i<result.mesh.num_segments;i++) parents.mutable_data()[i]=result.segment_parents[i];
+        raw["segment_parents"]=parents;
+        raw["insertion_kind"]=result.insertion_kind==DTCC_MESHER_INSERT_SEGMENT ? "segment" :
+            result.insertion_kind==DTCC_MESHER_INSERT_INTERIOR ? "interior" : "none";
+        raw["inserted_point"]=result.inserted_point==SIZE_MAX ? py::none() : py::cast(result.inserted_point);
+        raw["parent_segment"]=result.parent_segment==SIZE_MAX ? py::none() : py::cast(result.parent_segment);
+        raw["segment_parameter"]=result.segment_parameter;
+        py::list segment_trials;
+        for(size_t i=0;i<result.num_segment_trials;i++) {
+            py::dict trial;
+            trial["parent_segment"]=result.segment_trials[i].parent_segment;
+            trial["segment_parameter"]=result.segment_trials[i].segment_parameter;
+            segment_trials.append(trial);
+        }
+        raw["segment_trials"]=py::tuple(segment_trials);
+        raw["before"]=shape_score_dict(result.before);raw["after"]=shape_score_dict(result.after);
+        raw["quality_before"]=dtcc_mesher_summary_to_dict(result.quality_before);
+        raw["flips"]=result.flips;raw["candidate_evaluations"]=result.candidate_evaluations;
+        raw["termination"]=result.termination;
+        dtcc_mesher_improvement_free(&result);return raw;
+    } catch(...) {dtcc_mesher_improvement_free(&result);throw;}
+}
+
 PYBIND11_MODULE(_core, m)
 {
+    m.def("_improve_raw", &improve_raw, py::arg("points"),py::arg("triangles"),py::arg("segments"),py::arg("max_added_points"),py::arg("allow_interior"),py::arg("splittable_segments"));
     m.doc() = "pybind11 bindings for the DTCC Mesher C library";
     m.attr("__version__") = DTCC_MESHER_VERSION_STRING;
 
@@ -657,7 +737,8 @@ PYBIND11_MODULE(_core, m)
         py::arg("acute_mode") = 2,
         py::arg("protect_angle_deg") = py::none(),
         py::arg("max_refinement_steps") = 0,
-        py::arg("max_protection_levels") = 6
+        py::arg("max_protection_levels") = 6,
+        py::arg("reuse_acute_corners") = false
     );
     m.def(
         "_generate_coverage_raw",
@@ -674,7 +755,8 @@ PYBIND11_MODULE(_core, m)
         py::arg("acute_mode") = 2,
         py::arg("protect_angle_deg") = py::none(),
         py::arg("max_refinement_steps") = 0,
-        py::arg("max_protection_levels") = 6
+        py::arg("max_protection_levels") = 6,
+        py::arg("reuse_acute_corners") = false
     );
     m.def(
         "_validate_segment_graph_raw",

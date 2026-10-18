@@ -56,6 +56,7 @@ typedef struct {
     double protect_angle_deg;
     size_t max_refinement_steps;
     size_t max_protection_levels;
+    int reuse_acute_corners;
 } dtcc_mesher_options;
 
 typedef struct {
@@ -73,6 +74,7 @@ typedef struct {
     size_t num_triangle_split_points;
     size_t num_protected_corners;
     size_t num_exempt_triangles;
+    unsigned char *quality_exempt;
 } dtcc_mesher_mesh;
 
 typedef struct {

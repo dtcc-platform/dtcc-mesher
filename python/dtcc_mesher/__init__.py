@@ -18,6 +18,8 @@ __all__ = [
     "Domain",
     "Mesh",
     "MeshingOptions",
+    "ImprovementResult",
+    "improve",
     "QualitySummary",
     "format_summary_lines",
     "mesh",
@@ -62,6 +64,8 @@ class MeshingOptions:
     protect_angle: float | None = None
     max_refine_steps: int = 0
     max_protection_levels: int = 6
+    # Restore shields on pre-discretized constraints instead of adding shells.
+    reuse_acute_corners: bool = False
 
 
 @dataclass(slots=True)
@@ -97,6 +101,7 @@ class Mesh:
     segments: np.ndarray
     summary: QualitySummary
     markers: np.ndarray | None = None
+    quality_exempt: np.ndarray | None = None
 
     def write_svg(self, path: str | Path) -> None:
         _io.write_svg(self, path)
@@ -205,6 +210,7 @@ def _mesh_from_raw(raw: dict) -> Mesh:
         segments=np.asarray(raw["segments"], dtype=np.uint32),
         summary=_summary_from_raw(raw["summary"]),
         markers=np.asarray(raw["markers"], dtype=np.int32) if "markers" in raw else None,
+        quality_exempt=np.asarray(raw["quality_exempt"], dtype=bool) if "quality_exempt" in raw else None,
     )
 
 
@@ -427,6 +433,7 @@ def _domain_mesh(domain: Domain, options: MeshingOptions) -> Mesh:
         options.protect_angle,
         options.max_refine_steps,
         options.max_protection_levels,
+        options.reuse_acute_corners,
     )
     return _mesh_from_raw(raw)
 
@@ -446,6 +453,7 @@ def _coverage_graph_mesh(graph: CoverageGraph, options: MeshingOptions) -> Mesh:
         options.protect_angle,
         options.max_refine_steps,
         options.max_protection_levels,
+        options.reuse_acute_corners,
     )
     return _mesh_from_raw(raw)
 
@@ -479,3 +487,55 @@ def mesh(
 def read_domain(path: str | Path | PathLike[str]) -> Domain:
     points, segments, holes = _io.read_domain_file(path)
     return Domain(points=points, segments=segments, holes=holes)
+
+
+@dataclass
+class ImprovementResult:
+    """Owned candidate, stable input indices and oriented split provenance."""
+    mesh: Mesh
+    insertion_kind: str
+    inserted_point: int | None
+    parent_segment: int | None
+    segment_parameter: float
+    segment_parents: np.ndarray
+    before: dict
+    after: dict
+    quality_before: QualitySummary
+    flips: int
+    candidate_evaluations: int
+    termination: str
+    segment_trials: tuple[dict, ...] = ()
+
+
+def improve(mesh: Mesh, *, max_added_points: int = 0,
+            splittable_segments=(), allow_interior: bool = True) -> ImprovementResult:
+    """Optimize a private copy with zero or one extra point; no refinement.
+
+    Only explicitly listed input segment indices may split. Original point
+    indices/coordinates remain fixed. Output segment_parents maps each segment
+    to its input segment. Quality optimization need not preserve Delaunay edges.
+    No beneficial trial is a normal result; invalid/unsupported meshes raise.
+    Triangle markers are unsupported: split semantic domains before calling.
+    """
+    if not isinstance(max_added_points, (int, np.integer)) or isinstance(max_added_points, (bool, np.bool_)) or max_added_points not in (0, 1):
+        raise ValueError("max_added_points must be zero or one")
+    if not isinstance(allow_interior, (bool, np.bool_)):
+        raise ValueError("allow_interior must be boolean")
+    if mesh.markers is not None:
+        raise ValueError("improve requires one semantic domain without triangle markers")
+    points = _require_points(mesh.points, name="points")
+    triangles = np.asarray(mesh.triangles)
+    segments = np.asarray(mesh.segments)
+    allowed = np.asarray(splittable_segments)
+    for array, width in [(triangles, 3), (segments, 2)]:
+        if array.ndim != 2 or array.shape[1] != width or not np.issubdtype(array.dtype, np.integer) or np.any(array < 0):
+            raise ValueError("triangle/segment indices must be nonnegative integer arrays")
+        if array.size and np.max(array) >= len(points):
+            raise ValueError("mesh index outside points")
+    if allowed.ndim != 1 or (allowed.size and (not np.issubdtype(allowed.dtype, np.integer) or np.any(allowed < 0) or np.any(allowed >= len(segments)))):
+        raise ValueError("invalid splittable segment indices")
+    raw = _core._improve_raw(points, triangles, segments, int(max_added_points), bool(allow_interior),
+                             np.asarray(allowed, dtype=np.uintp))
+    result_mesh = _mesh_from_raw(raw)
+    return ImprovementResult(result_mesh, **{key: (QualitySummary(**value) if key == "quality_before" else value)
+        for key, value in raw.items() if key not in ("points", "triangles", "segments", "summary")})

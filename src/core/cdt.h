@@ -20,6 +20,7 @@ typedef struct {
     double protect_angle_deg;
     size_t max_refinement_steps;
     size_t max_protection_levels;
+    int reuse_acute_corners;
 } TMBuildOptions;
 
 typedef struct {
@@ -36,5 +37,7 @@ TMStatus tm_build_coverage_mesh(
     TMMesh *out_mesh,
     int **out_triangle_markers
 );
+
+TMStatus tm_split_segment_registry(TMMesh *mesh, size_t segment_index, int point_index);
 
 #endif

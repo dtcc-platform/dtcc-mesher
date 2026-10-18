@@ -1944,7 +1944,7 @@ static TMStatus tm_append_live_segment_unique(
     return status;
 }
 
-static TMStatus tm_split_segment_registry(TMMesh *mesh, size_t segment_index, int point_index)
+TMStatus tm_split_segment_registry(TMMesh *mesh, size_t segment_index, int point_index)
 {
     TMSegment segment = mesh->segments[segment_index];
     TMStatus status;
@@ -2662,6 +2662,7 @@ static TMStatus tm_find_crossing_edge(
     const TMMesh *mesh,
     int seg_a,
     int seg_b,
+    int require_flippable,
     int *out_triangle,
     int *out_edge
 )
@@ -2691,6 +2692,13 @@ static TMStatus tm_find_crossing_edge(
                     mesh->points[a].xy,
                     mesh->points[b].xy
                 )) {
+                /* Another crossed edge can be flippable even when this
+                 * quadrilateral is concave. Do not split a recoverable input
+                 * segment merely because the first crossed edge is blocked.
+                 */
+                if (require_flippable && !tm_edge_is_flippable(mesh, (int) tri_index, edge)) {
+                    continue;
+                }
                 *out_triangle = (int) tri_index;
                 *out_edge = edge;
                 return TM_OK;
@@ -2889,7 +2897,7 @@ static TMStatus tm_recover_segment(TMMesh *mesh, int a, int b, const TMBuildOpti
         int edge;
         TMStatus status;
 
-        status = tm_find_crossing_edge(mesh, a, b, &triangle_index, &edge);
+        status = tm_find_crossing_edge(mesh, a, b, !tm_refinement_enabled(options), &triangle_index, &edge);
         if (status != TM_OK) {
             break;
         }
@@ -3333,6 +3341,77 @@ static TMStatus tm_apply_shell_acute_corner_protection(
     return TM_OK;
 }
 
+/* Restore a geometric corner shield across an already discretized ray. */
+static TMStatus tm_reuse_corner_ray(TMMesh *mesh, int apex, int first,
+                                    TMProtectionSide side, double radius)
+{
+    const double *origin = mesh->points[apex].xy;
+    double dx = mesh->points[first].xy[0] - origin[0];
+    double dy = mesh->points[first].xy[1] - origin[1];
+    double length = hypot(dx, dy);
+    int previous = apex;
+    int current = first;
+    unsigned int level = 1;
+    size_t steps;
+    for (steps = 0; steps < mesh->point_count; ++steps) {
+        double distance = hypot(mesh->points[current].xy[0]-origin[0], mesh->points[current].xy[1]-origin[1]);
+        size_t si;
+        int next = -1;
+        if (radius > 0.0 && previous != apex && distance > radius + 1e-9) break;
+        if (radius > 0.0) {
+            TMStatus status = tm_mark_live_segment_protected_with_apex(mesh, previous, current, apex);
+            if (status != TM_OK) return status;
+            tm_mark_shell_point(mesh, current, apex, side, level++);
+        }
+        for (si = 0; si < mesh->segment_count; ++si) {
+            const TMSegment *segment = &mesh->segments[si];
+            int candidate;
+            double x, y, along, perpendicular;
+            if (!segment->live) continue;
+            if (segment->v[0] == current) candidate = segment->v[1];
+            else if (segment->v[1] == current) candidate = segment->v[0];
+            else continue;
+            if (candidate == previous) continue;
+            x = mesh->points[candidate].xy[0]-origin[0];
+            y = mesh->points[candidate].xy[1]-origin[1];
+            along = (x*dx+y*dy)/length;
+            perpendicular = fabs(x*dy-y*dx)/length;
+            if (along > distance && perpendicular <= 1e-9) { next = candidate; break; }
+        }
+        if (next < 0) break;
+        previous = current;
+        current = next;
+    }
+    return TM_OK;
+}
+
+static double tm_corner_ray_length(const TMMesh *mesh, int apex, int first)
+{
+    const double *origin = mesh->points[apex].xy;
+    double dx = mesh->points[first].xy[0]-origin[0], dy = mesh->points[first].xy[1]-origin[1];
+    double length = hypot(dx,dy), distance = length;
+    int previous=apex, current=first;
+    size_t steps;
+    for (steps=0; steps<mesh->point_count; ++steps) {
+        size_t si; int next=-1;
+        for (si=0; si<mesh->segment_count; ++si) {
+            const TMSegment *segment=&mesh->segments[si];
+            int candidate; double x,y,along;
+            if (!segment->live) continue;
+            if (segment->v[0]==current) candidate=segment->v[1];
+            else if (segment->v[1]==current) candidate=segment->v[0];
+            else continue;
+            if (candidate==previous) continue;
+            x=mesh->points[candidate].xy[0]-origin[0]; y=mesh->points[candidate].xy[1]-origin[1];
+            along=(x*dx+y*dy)/length;
+            if (along>distance && fabs(x*dy-y*dx)/length<=1e-9) { next=candidate; distance=along; break; }
+        }
+        if (next<0) break;
+        previous=current; current=next;
+    }
+    return distance;
+}
+
 static TMStatus tm_apply_acute_corner_protection(TMMesh *mesh, const TMBuildOptions *options)
 {
     double protect_angle_deg = tm_protection_angle_deg(options);
@@ -3383,6 +3462,17 @@ static TMStatus tm_apply_acute_corner_protection(TMMesh *mesh, const TMBuildOpti
                     &angle_deg
                 )) {
                 break;
+            }
+
+            /* A coordinated remesh already contains the protective shell.
+             * Restore its discretized shield without recursively shrinking it. */
+            if (options->reuse_acute_corners) {
+                double radius = 0.5 * fmin(tm_corner_ray_length(mesh, apex, left), tm_corner_ray_length(mesh, apex, right));
+                if (options->max_edge_length > 0.0) radius = fmin(radius, 0.5 * options->max_edge_length);
+                status = tm_reuse_corner_ray(mesh, apex, left, TM_PROTECTION_SIDE_LEFT, radius);
+                if (status == TM_OK) status = tm_reuse_corner_ray(mesh, apex, right, TM_PROTECTION_SIDE_RIGHT, radius);
+                if (status != TM_OK) { final_status = status; goto cleanup; }
+                continue;
             }
 
             while (levels < protection_level_limit && angle_deg * (double) (1ULL << levels) < protect_angle_deg) {

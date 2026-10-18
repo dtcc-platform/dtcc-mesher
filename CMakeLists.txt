@@ -33,6 +33,7 @@ set(DTCC_MESHER_CORE_SOURCES
   src/core/validate.c
   src/third_party/predicates.c
   src/api/dtcc_mesher.c
+  src/api/improve.c
   src/api/dtcc_mesher_io.c
 )
 
@@ -124,6 +125,10 @@ if(DTCC_MESHER_BUILD_TESTS)
   endif()
   add_test(NAME c_algorithmic COMMAND dtcc_mesher_algorithmic_tests)
   set_tests_properties(c_algorithmic PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+  add_executable(dtcc_mesher_improve_tests tests/c/test_improve.c)
+  target_link_libraries(dtcc_mesher_improve_tests PRIVATE dtcc_mesher)
+  add_test(NAME c_improve COMMAND dtcc_mesher_improve_tests)
 
   add_executable(dtcc_mesher_c_api_tests tests/c/test_api.c)
   target_compile_features(dtcc_mesher_c_api_tests PRIVATE c_std_11)
