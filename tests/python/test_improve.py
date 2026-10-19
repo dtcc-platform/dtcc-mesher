@@ -186,3 +186,39 @@ def test_segment_local_search_survives_remote_worst_triangle_selection():
     assert np.array_equal(r.mesh.points[:-1],m.points)
     assert r.after['poor_5_count']<=r.before['poor_5_count']
     assert r.after['poor_10_count']<=r.before['poor_10_count']
+
+
+@pytest.mark.parametrize('offset,scale', [(np.zeros(2), 1.), (np.zeros(2), .001),
+    (np.zeros(2), 1000.), (np.array([386000., 6174000.]), 1.)])
+def test_thin_convex_hull_has_complete_coverage_and_fixed_constraints(offset, scale):
+    import json
+    from pathlib import Path
+    data = json.loads((Path(__file__).parents[1]/'cases/thin_hull_domain.json').read_text())
+    points = np.asarray(data['points'])*scale+offset
+    segments = np.asarray(data['segments'], dtype=np.uint32)
+    polygon = points[[0, 3, 4, 2, 1]]-points[0]
+    expected = abs(np.sum(polygon[:, 0]*np.roll(polygon[:, 1], -1)
+                          -polygon[:, 1]*np.roll(polygon[:, 0], -1)))/2
+    raw = dm.mesh(dm.Domain(points, segments),
+                  options=dm.MeshingOptions(refine=False, acute_protection='none'))
+    assert len(raw.points) == 5 and len(raw.triangles) == 3
+    assert np.array_equal(raw.points, points)
+    assert set(map(tuple, np.sort(raw.segments, axis=1))) == set(map(tuple, np.sort(segments, axis=1)))
+    assert area(raw) == pytest.approx(expected, rel=1e-10)
+    assert area(dm.improve(raw, max_added_points=0).mesh) == pytest.approx(expected, rel=1e-10)
+
+
+@pytest.mark.parametrize('case', ['fixed_interior_near_boundary', 'near_collinear_boundary'])
+def test_nearly_collinear_boundary_with_fixed_interior_points(case):
+    import json
+    from pathlib import Path
+    data = json.loads((Path(__file__).parents[1]/f'cases/{case}.json').read_text())
+    points, segments = np.asarray(data['points']), np.asarray(data['segments'], dtype=np.uint32)
+    raw = dm.mesh(dm.Domain(points, segments),
+                  options=dm.MeshingOptions(refine=False, acute_protection='none'))
+    assert np.array_equal(raw.points, points)
+    assert set(map(tuple, np.sort(raw.segments, axis=1))) == set(map(tuple, np.sort(segments, axis=1)))
+    boundary_points = len(np.unique(segments))
+    assert len(raw.triangles) == 2*len(points)-boundary_points-2
+    assert set(np.unique(raw.triangles)) == set(range(len(points)))
+    assert area(dm.improve(raw, max_added_points=0).mesh) == pytest.approx(area(raw), rel=1e-10)

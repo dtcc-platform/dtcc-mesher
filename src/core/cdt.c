@@ -36,20 +36,6 @@ static TMStatus tm_append_live_segment_unique(
     const TMSegment *source_flags
 );
 static TMStatus tm_recover_segment(TMMesh *mesh, int a, int b, const TMBuildOptions *options);
-static void tm_choose_recovery_split_coordinates(
-    const TMMesh *mesh,
-    int a,
-    int b,
-    double point[2],
-    int *out_blocker_index,
-    double *out_blocker_distance
-);
-static TMStatus tm_split_recovery_segment(
-    TMMesh *mesh,
-    int a,
-    int b,
-    const TMBuildOptions *options
-);
 static TMStatus tm_restore_constrained_delaunay(TMMesh *mesh, const TMBuildOptions *options);
 static int tm_evaluate_triangle_refinement_need(
     const TMMesh *mesh,
@@ -620,6 +606,7 @@ static int tm_find_near_segment_free_point(
 
 static TMStatus tm_pre_split_near_segment_free_points(TMPSLG *pslg, const TMBuildOptions *options)
 {
+    if (!tm_refinement_enabled(options)) return TM_OK;
     for (;;) {
         size_t *degree;
         size_t segment_index;
@@ -1970,88 +1957,6 @@ TMStatus tm_split_segment_registry(TMMesh *mesh, size_t segment_index, int point
     return status;
 }
 
-static TMStatus tm_copy_live_segments_with_split(
-    const TMMesh *source,
-    TMMesh *target,
-    int a,
-    int b,
-    int point_index
-)
-{
-    size_t segment_index;
-
-    for (segment_index = 0; segment_index < source->segment_count; ++segment_index) {
-        const TMSegment *segment = &source->segments[segment_index];
-        int matches_target =
-            segment->live &&
-            ((segment->v[0] == a && segment->v[1] == b) || (segment->v[0] == b && segment->v[1] == a));
-
-        if (!segment->live) {
-            continue;
-        }
-
-        if (matches_target) {
-            TMStatus status = tm_append_live_segment_unique(
-                target,
-                a,
-                point_index,
-                segment->original_index,
-                segment
-            );
-            if (status != TM_OK) {
-                return status;
-            }
-            status = tm_append_live_segment_unique(
-                target,
-                point_index,
-                b,
-                segment->original_index,
-                segment
-            );
-            if (status != TM_OK) {
-                return status;
-            }
-            continue;
-        }
-
-        {
-            TMStatus status = tm_append_live_segment_unique(
-                target,
-                segment->v[0],
-                segment->v[1],
-                segment->original_index,
-                segment
-            );
-            if (status != TM_OK) {
-                return status;
-            }
-        }
-    }
-
-    return TM_OK;
-}
-
-static TMStatus tm_recover_all_live_segments(TMMesh *mesh, const TMBuildOptions *options)
-{
-    size_t segment_index;
-
-    for (segment_index = 0; segment_index < mesh->segment_count; ++segment_index) {
-        TMSegment segment = mesh->segments[segment_index];
-        TMStatus status;
-
-        if (!segment.live) {
-            continue;
-        }
-
-        status = tm_recover_segment(mesh, segment.v[0], segment.v[1], options);
-        if (status != TM_OK) {
-            return status;
-        }
-    }
-
-    return tm_restore_constrained_delaunay(mesh, options);
-}
-
 static double tm_triangle_radius_edge_ratio(const TMMesh *mesh, int triangle_index)
 {
     const TMTriangle *triangle = &mesh->triangles[triangle_index];
@@ -2658,273 +2563,74 @@ static size_t tm_count_live_segments(const TMMesh *mesh)
     return live_count;
 }
 
-static TMStatus tm_find_crossing_edge(
-    const TMMesh *mesh,
-    int seg_a,
-    int seg_b,
-    int require_flippable,
-    int *out_triangle,
-    int *out_edge
-)
+typedef struct {int a,b;double parameter;} TMRecoveryEdge;
+
+static int tm_compare_recovery_edges(const void *left,const void *right)
 {
-    size_t tri_index;
+    const TMRecoveryEdge *a=left,*b=right;
+    if (a->parameter<b->parameter) return -1;
+    if (a->parameter>b->parameter) return 1;
+    if (a->a!=b->a) return a->a<b->a ? -1:1;
+    return a->b<b->b ? -1:a->b>b->b;
+}
 
-    for (tri_index = 0; tri_index < mesh->triangle_count; ++tri_index) {
+static TMStatus tm_recover_segment(TMMesh *mesh,int a,int b,const TMBuildOptions *options)
+{
+    TMRecoveryEdge *queue;
+    size_t count=0,capacity=3*mesh->triangle_count+1,i,head=0,tail,blocked=0,steps=0,limit;
+    TMStatus status=TM_OK;
+    if (tm_mesh_has_edge(mesh,a,b,NULL,NULL)) return tm_mark_constraint_edge(mesh,a,b);
+    queue=malloc(capacity*sizeof(*queue));
+    if (!queue) return TM_ERR_ALLOC;
+    for (i=0;i<mesh->triangle_count;++i) {
         int edge;
-
-        for (edge = 0; edge < 3; ++edge) {
-            int a;
-            int b;
-            int neighbor = mesh->triangles[tri_index].nbr[edge];
-
-            if (neighbor < 0 || (size_t) neighbor <= tri_index || mesh->triangles[tri_index].constrained[edge]) {
-                continue;
+        for (edge=0;edge<3;++edge) {
+            int u,v,neighbour=mesh->triangles[i].nbr[edge];
+            double p,q;
+            if (neighbour<0 || (size_t)neighbour<=i) continue;
+            tm_triangle_edge_vertices(&mesh->triangles[i],edge,&u,&v);
+            if (!tm_segments_cross_properly(mesh->points[a].xy,mesh->points[b].xy,
+                                           mesh->points[u].xy,mesh->points[v].xy)) continue;
+            if (mesh->triangles[i].constrained[edge]) {
+                tm_set_pslg_error_detail("constraint %d-%d crosses fixed constraint %d-%d",a,b,u,v);
+                free(queue);return TM_ERR_INVALID_PSLG;
             }
-
-            tm_triangle_edge_vertices(&mesh->triangles[tri_index], edge, &a, &b);
-            if (a == seg_a || a == seg_b || b == seg_a || b == seg_b) {
-                continue;
-            }
-
-            if (tm_segments_cross_properly(
-                    mesh->points[seg_a].xy,
-                    mesh->points[seg_b].xy,
-                    mesh->points[a].xy,
-                    mesh->points[b].xy
-                )) {
-                /* Another crossed edge can be flippable even when this
-                 * quadrilateral is concave. Do not split a recoverable input
-                 * segment merely because the first crossed edge is blocked.
-                 */
-                if (require_flippable && !tm_edge_is_flippable(mesh, (int) tri_index, edge)) {
-                    continue;
-                }
-                *out_triangle = (int) tri_index;
-                *out_edge = edge;
-                return TM_OK;
-            }
+            p=tm_orient_xy(mesh->points[u].xy,mesh->points[v].xy,mesh->points[a].xy);
+            q=tm_orient_xy(mesh->points[u].xy,mesh->points[v].xy,mesh->points[b].xy);
+            queue[count++]=(TMRecoveryEdge){u,v,p/(p-q)};
         }
     }
-
+    qsort(queue,count,sizeof(*queue),tm_compare_recovery_edges);
+    tail=count;
+    limit=8*count*count+mesh->point_count*8+16;
+    /* Process the complete crossing sequence. A newly flipped diagonal may
+     * still cross the constraint: defer it behind the other crossings instead
+     * of immediately flipping it back during another global scan. */
+    while (count && steps++<limit) {
+        TMRecoveryEdge current=queue[head];int triangle,edge,c,d,neighbour,other;
+        head=(head+1)%capacity;count--;
+        if (!tm_mesh_has_edge(mesh,current.a,current.b,&triangle,&edge)) continue;
+        if (!tm_edge_is_flippable(mesh,triangle,edge)) {
+            queue[tail]=current;tail=(tail+1)%capacity;count++;blocked++;
+            if (blocked>=count) break;
+            continue;
+        }
+        blocked=0;
+        neighbour=mesh->triangles[triangle].nbr[edge];
+        other=tm_find_edge_in_triangle(&mesh->triangles[neighbour],current.a,current.b);
+        c=mesh->triangles[triangle].v[edge];d=mesh->triangles[neighbour].v[other];
+        status=tm_flip_edge(mesh,triangle,edge);
+        if (status!=TM_OK) {free(queue);return status;}
+        if (tm_mesh_has_edge(mesh,a,b,NULL,NULL)) {free(queue);return tm_mark_constraint_edge(mesh,a,b);}
+        if (tm_segments_cross_properly(mesh->points[a].xy,mesh->points[b].xy,
+                                      mesh->points[c].xy,mesh->points[d].xy)) {
+            queue[tail]=(TMRecoveryEdge){c,d,0.};tail=(tail+1)%capacity;count++;
+        }
+    }
+    free(queue);
+    (void)options;
+    tm_set_pslg_error_detail("constraint %d-%d could not be recovered without changing input geometry",a,b);
     return TM_ERR_INVALID_MESH;
-}
-
-static void tm_choose_recovery_split_coordinates(
-    const TMMesh *mesh,
-    int a,
-    int b,
-    double point[2],
-    int *out_blocker_index,
-    double *out_blocker_distance
-)
-{
-    const double *pa = mesh->points[a].xy;
-    const double *pb = mesh->points[b].xy;
-    double dx = pb[0] - pa[0];
-    double dy = pb[1] - pa[1];
-    double segment_length_sq = dx * dx + dy * dy;
-    double best_distance_sq = INFINITY;
-    double best_t = 0.5;
-    int best_index = -1;
-    size_t point_index;
-
-    point[0] = 0.5 * (pa[0] + pb[0]);
-    point[1] = 0.5 * (pa[1] + pb[1]);
-
-    if (segment_length_sq <= 0.0) {
-        if (out_blocker_index != NULL) {
-            *out_blocker_index = -1;
-        }
-        if (out_blocker_distance != NULL) {
-            *out_blocker_distance = 0.0;
-        }
-        return;
-    }
-
-    for (point_index = 0; point_index < mesh->point_count; ++point_index) {
-        const double *candidate = mesh->points[point_index].xy;
-        double t;
-        double projection[2];
-        double distance_sq;
-
-        if ((int) point_index == a || (int) point_index == b || mesh->points[point_index].kind == TM_VERTEX_SUPER) {
-            continue;
-        }
-
-        t = ((candidate[0] - pa[0]) * dx + (candidate[1] - pa[1]) * dy) / segment_length_sq;
-        if (t <= 1e-6 || t >= 1.0 - 1e-6) {
-            continue;
-        }
-
-        projection[0] = pa[0] + t * dx;
-        projection[1] = pa[1] + t * dy;
-        distance_sq = tm_distance_squared(candidate, projection);
-        if (distance_sq < best_distance_sq) {
-            best_distance_sq = distance_sq;
-            best_t = t;
-            best_index = (int) point_index;
-        }
-    }
-
-    if (best_index >= 0 && best_distance_sq <= segment_length_sq * 1e-6) {
-        point[0] = pa[0] + best_t * dx;
-        point[1] = pa[1] + best_t * dy;
-    } else {
-        best_index = -1;
-        best_distance_sq = tm_distance_squared(pa, point);
-    }
-
-    if (out_blocker_index != NULL) {
-        *out_blocker_index = best_index;
-    }
-    if (out_blocker_distance != NULL) {
-        *out_blocker_distance = sqrt(best_distance_sq);
-    }
-}
-
-static TMStatus tm_split_recovery_segment(
-    TMMesh *mesh,
-    int a,
-    int b,
-    const TMBuildOptions *options
-)
-{
-    TMPoint *input_points = NULL;
-    TMMesh rebuilt;
-    double split_point[2];
-    int blocker_index = -1;
-    double blocker_distance = 0.0;
-    int use_existing_point = 0;
-    int point_index;
-    size_t rebuild_point_count;
-    TMStatus status;
-
-    tm_verbose_log(options, "recover segment %d-%d stalled; split and retry", a, b);
-    tm_choose_recovery_split_coordinates(mesh, a, b, split_point, &blocker_index, &blocker_distance);
-    if (blocker_index >= 0) {
-        tm_verbose_log(
-            options,
-            "recover segment %d-%d: rebuild with split at projection of point %d (distance %.6g)",
-            a,
-            b,
-            blocker_index,
-            blocker_distance
-        );
-    } else {
-        tm_verbose_log(options, "recover segment %d-%d: rebuild with midpoint split", a, b);
-    }
-
-    memset(&rebuilt, 0, sizeof(rebuilt));
-    use_existing_point = blocker_index >= 0;
-    point_index = use_existing_point ? blocker_index : (int) mesh->point_count;
-    rebuild_point_count = mesh->point_count + (use_existing_point ? 0u : 1u);
-    input_points = (TMPoint *) calloc(rebuild_point_count, sizeof(*input_points));
-    if (input_points == NULL) {
-        return TM_ERR_ALLOC;
-    }
-
-    memcpy(input_points, mesh->points, mesh->point_count * sizeof(*input_points));
-    if (!use_existing_point) {
-        input_points[point_index].xy[0] = split_point[0];
-        input_points[point_index].xy[1] = split_point[1];
-        input_points[point_index].original_index = point_index;
-        input_points[point_index].kind = TM_VERTEX_SEGMENT_SPLIT;
-        input_points[point_index].incident_triangle = -1;
-        input_points[point_index].protection_apex = -1;
-        input_points[point_index].protection_side = TM_PROTECTION_SIDE_NONE;
-        input_points[point_index].protection_level = 0;
-    }
-
-    status = tm_build_mesh(input_points, rebuild_point_count, &rebuilt);
-    if (status == TM_OK) {
-        size_t i;
-
-        tm_verbose_log(
-            options,
-            "recover segment %d-%d: rebuilt unconstrained triangulation with %zu points and %zu triangles",
-            a,
-            b,
-            rebuilt.point_count,
-            rebuilt.triangle_count
-        );
-        for (i = 0; i < rebuild_point_count; ++i) {
-            rebuilt.points[i].kind = input_points[i].kind;
-            rebuilt.points[i].original_index = input_points[i].original_index;
-            rebuilt.points[i].protection_apex = input_points[i].protection_apex;
-            rebuilt.points[i].protection_side = input_points[i].protection_side;
-            rebuilt.points[i].protection_level = input_points[i].protection_level;
-        }
-
-        status = tm_copy_live_segments_with_split(mesh, &rebuilt, a, b, point_index);
-        if (status != TM_OK) {
-            tm_verbose_log(options, "recover segment %d-%d: copying live segments to rebuilt mesh failed", a, b);
-        }
-    } else {
-        tm_verbose_log(options, "recover segment %d-%d: rebuilding unconstrained triangulation failed", a, b);
-    }
-    if (status == TM_OK) {
-        tm_verbose_log(options, "recover segment %d-%d: recovering constraints on rebuilt mesh", a, b);
-        status = tm_recover_all_live_segments(&rebuilt, options);
-        if (status != TM_OK) {
-            tm_verbose_log(options, "recover segment %d-%d: constraint recovery on rebuilt mesh failed", a, b);
-        }
-    }
-
-    free(input_points);
-    if (status != TM_OK) {
-        tm_verbose_log(options, "recover segment %d-%d: rebuilt recovery path failed", a, b);
-        tm_free_mesh(&rebuilt);
-        return status;
-    }
-
-    tm_free_mesh(mesh);
-    *mesh = rebuilt;
-    return status;
-}
-
-static TMStatus tm_recover_segment(TMMesh *mesh, int a, int b, const TMBuildOptions *options)
-{
-    size_t iteration_limit;
-    size_t iteration;
-
-    if (tm_mesh_has_edge(mesh, a, b, NULL, NULL)) {
-        return tm_mark_constraint_edge(mesh, a, b);
-    }
-
-    iteration_limit = mesh->triangle_count * mesh->triangle_count + mesh->point_count * 8 + 16;
-    for (iteration = 0; iteration < iteration_limit; ++iteration) {
-        int triangle_index;
-        int edge;
-        TMStatus status;
-
-        status = tm_find_crossing_edge(mesh, a, b, !tm_refinement_enabled(options), &triangle_index, &edge);
-        if (status != TM_OK) {
-            break;
-        }
-
-        tm_verbose_log(options, "recover segment %d-%d: flip crossing edge in triangle %d edge %d", a, b, triangle_index, edge);
-        status = tm_flip_edge(mesh, triangle_index, edge);
-        if (status != TM_OK) {
-            tm_verbose_log(
-                options,
-                "recover segment %d-%d: edge flip failed with status %d; split and retry",
-                a,
-                b,
-                (int) status
-            );
-            break;
-        }
-
-        if (tm_mesh_has_edge(mesh, a, b, NULL, NULL)) {
-            return tm_mark_constraint_edge(mesh, a, b);
-        }
-    }
-
-    if (tm_mesh_has_edge(mesh, a, b, NULL, NULL)) {
-        return tm_mark_constraint_edge(mesh, a, b);
-    }
-
-    return tm_split_recovery_segment(mesh, a, b, options);
 }
 
 static TMStatus tm_restore_constrained_delaunay(TMMesh *mesh, const TMBuildOptions *options)
@@ -4202,49 +3908,60 @@ static TMStatus tm_refine_quality_mesh(TMMesh *mesh, const TMBuildOptions *optio
 
 static int tm_point_in_domain(const TMPSLG *pslg, const double point[2])
 {
-    size_t segment_index;
-    int winding = 0;
-
-    for (segment_index = 0; segment_index < pslg->segment_count; ++segment_index) {
-        const double *a = pslg->points[pslg->segments[segment_index].v[0]].xy;
-        const double *b = pslg->points[pslg->segments[segment_index].v[1]].xy;
-        double ay = a[1];
-        double by = b[1];
-
-        if ((ay > point[1]) == (by > point[1])) {
-            continue;
-        }
-
-        {
-            double x = a[0] + (point[1] - ay) * (b[0] - a[0]) / (by - ay);
-            if (x > point[0]) {
-                winding = !winding;
-            }
-        }
+    size_t i;
+    int inside = 0;
+    for (i=0; i<pslg->segment_count; ++i) {
+        const double *a=pslg->points[pslg->segments[i].v[0]].xy;
+        const double *b=pslg->points[pslg->segments[i].v[1]].xy;
+        double side;
+        if ((a[1]>point[1]) == (b[1]>point[1])) continue;
+        side=orient2d((REAL *)a,(REAL *)b,(REAL *)point);
+        if ((b[1]>a[1] && side>0.) || (b[1]<a[1] && side<0.)) inside=!inside;
     }
-
-    return winding;
+    return inside;
 }
 
 static TMStatus tm_filter_domain_triangles(TMMesh *mesh, const TMPSLG *pslg, const TMBuildOptions *options)
 {
     size_t tri_index;
 
-    for (tri_index = 0; tri_index < mesh->triangle_count; ++tri_index) {
-        double centroid[2];
-        const TMTriangle *triangle = &mesh->triangles[tri_index];
-
-        centroid[0] = (mesh->points[triangle->v[0]].xy[0] +
-                       mesh->points[triangle->v[1]].xy[0] +
-                       mesh->points[triangle->v[2]].xy[0]) / 3.0;
-        centroid[1] = (mesh->points[triangle->v[0]].xy[1] +
-                       mesh->points[triangle->v[1]].xy[1] +
-                       mesh->points[triangle->v[2]].xy[1]) / 3.0;
-
-        if (!tm_point_in_domain(pslg, centroid)) {
-            mesh->triangles[tri_index].dead = 1;
+    unsigned char *seen=calloc(mesh->triangle_count,sizeof(*seen));
+    size_t *component=malloc(mesh->triangle_count*sizeof(*component));
+    if (!seen || !component) {free(seen);free(component);return TM_ERR_ALLOC;}
+    /* A constrained component has one domain membership. Classify its largest
+     * triangle once, rather than numerically probing each almost-collinear ear.
+     * Components reaching an unconstrained hull edge are exterior by topology. */
+    for (tri_index=0;tri_index<mesh->triangle_count;++tri_index) {
+        size_t head=0,count=0,largest=tri_index,j;
+        double largest_area=-1.,point[2];
+        int exterior=0,inside;
+        if (seen[tri_index]) continue;
+        seen[tri_index]=1;component[count++]=tri_index;
+        while (head<count) {
+            size_t current=component[head++];
+            const TMTriangle *t=&mesh->triangles[current];
+            double area=fabs(orient2d((REAL *)mesh->points[t->v[0]].xy,
+                              (REAL *)mesh->points[t->v[1]].xy,(REAL *)mesh->points[t->v[2]].xy));
+            int edge;
+            if (area>largest_area) {largest_area=area;largest=current;}
+            for (edge=0;edge<3;++edge) {
+                int neighbour=t->nbr[edge];
+                if (t->constrained[edge]) continue;
+                if (neighbour<0) exterior=1;
+                else if (!seen[neighbour]) {seen[neighbour]=1;component[count++]=(size_t)neighbour;}
+            }
         }
+        {
+            const TMTriangle *t=&mesh->triangles[largest];
+            for (j=0;j<2;++j) {
+                double a=mesh->points[t->v[0]].xy[j];
+                point[j]=a+(mesh->points[t->v[1]].xy[j]-a)/3.+(mesh->points[t->v[2]].xy[j]-a)/3.;
+            }
+        }
+        inside=!exterior && tm_point_in_domain(pslg,point);
+        for (j=0;j<count;++j) mesh->triangles[component[j]].dead=!inside;
     }
+    free(seen);free(component);
 
     tm_verbose_log(options, "domain filter: compacting kept triangles");
 

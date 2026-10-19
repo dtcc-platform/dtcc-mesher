@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import pytest
+import numpy as np
 
 import dtcc_mesher as dm
 
@@ -74,12 +75,12 @@ def test_stockholm_case55_domains_capture_current_failure_modes(
         )
 
 
-def test_stockholm_case55_building31_domain_now_succeeds():
-    mesh = dm.mesh(
-        dm.read_domain(_case_path(_CASE55_FIXED_DOMAIN)),
-        options=dm.MeshingOptions(min_angle=25.0, refine=False),
-    )
-
-    assert mesh.points.shape == (85, 2)
-    assert mesh.triangles.shape == (106, 3)
-    assert mesh.segments.shape == (62, 2)
+def test_stockholm_case55_fixed_domain_retains_prescribed_geometry():
+    domain = dm.read_domain(_case_path(_CASE55_FIXED_DOMAIN))
+    mesh = dm.mesh(domain, options=dm.MeshingOptions(min_angle=25.0, refine=False))
+    np.testing.assert_array_equal(mesh.points, domain.points)
+    assert set(map(tuple,np.sort(mesh.segments,axis=1))) == set(map(tuple,np.sort(domain.segments,axis=1)))
+    assert len(mesh.triangles)>0
+    assert set(np.unique(mesh.triangles)) == set(range(len(domain.points)))
+    checked = dm.improve(mesh,max_added_points=0)
+    assert checked.after['minimum_q']>0

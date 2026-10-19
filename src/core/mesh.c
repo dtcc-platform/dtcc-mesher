@@ -288,54 +288,6 @@ static int tm_make_triangle(TMTriangle *triangle, int a, int b, int c, const TMP
     return tm_orient_value(&points[triangle->v[0]], &points[triangle->v[1]], &points[triangle->v[2]]) != 0.0;
 }
 
-static void tm_compute_supertriangle(const TMPoint *points, size_t count, TMPoint supertriangle[3])
-{
-    double min_x = points[0].xy[0];
-    double min_y = points[0].xy[1];
-    double max_x = points[0].xy[0];
-    double max_y = points[0].xy[1];
-    double span;
-    double mid_x;
-    double mid_y;
-    size_t i;
-
-    for (i = 1; i < count; ++i) {
-        if (points[i].xy[0] < min_x) {
-            min_x = points[i].xy[0];
-        }
-        if (points[i].xy[0] > max_x) {
-            max_x = points[i].xy[0];
-        }
-        if (points[i].xy[1] < min_y) {
-            min_y = points[i].xy[1];
-        }
-        if (points[i].xy[1] > max_y) {
-            max_y = points[i].xy[1];
-        }
-    }
-
-    span = max_x - min_x;
-    if (max_y - min_y > span) {
-        span = max_y - min_y;
-    }
-    if (span == 0.0) {
-        span = 1.0;
-    }
-
-    mid_x = 0.5 * (min_x + max_x);
-    mid_y = 0.5 * (min_y + max_y);
-
-    tm_init_point(&supertriangle[0], mid_x - 20.0 * span, mid_y - span, -1, TM_VERTEX_SUPER);
-    tm_init_point(&supertriangle[1], mid_x, mid_y + 20.0 * span, -1, TM_VERTEX_SUPER);
-    tm_init_point(&supertriangle[2], mid_x + 20.0 * span, mid_y - span, -1, TM_VERTEX_SUPER);
-
-    if (tm_orient_value(&supertriangle[0], &supertriangle[1], &supertriangle[2]) < 0.0) {
-        TMPoint tmp = supertriangle[1];
-        supertriangle[1] = supertriangle[2];
-        supertriangle[2] = tmp;
-    }
-}
-
 static int tm_all_collinear(const TMPoint *points, size_t count)
 {
     size_t i;
@@ -778,6 +730,8 @@ TMStatus tm_build_mesh(const TMPoint *input_points, size_t input_count, TMMesh *
     TMPoint *working_points = NULL;
     TMMesh working_mesh;
     size_t final_count = 0;
+    size_t *hull = NULL, hull_count = 0;
+    unsigned char *on_hull = NULL;
     size_t i;
     TMStatus status = TM_OK;
     int start_triangle = 0;
@@ -815,39 +769,71 @@ TMStatus tm_build_mesh(const TMPoint *input_points, size_t input_count, TMMesh *
         goto cleanup;
     }
 
-    tm_compute_supertriangle(working_points, input_count, &working_points[input_count]);
-
-    for (i = 0; i < 3; ++i) {
-        int point_index;
-
-        status = tm_append_point(
-            &working_mesh,
-            working_points[input_count + i].xy,
-            -1,
-            TM_VERTEX_SUPER,
-            &point_index
-        );
-        if (status != TM_OK) {
-            goto cleanup;
-        }
-    }
-
-    {
-        TMTriangle supertriangle;
-
-        if (!tm_make_triangle(&supertriangle, 0, 1, 2, working_mesh.points)) {
-            status = TM_ERR_INTERNAL;
-            goto cleanup;
-        }
-        status = tm_append_triangle(&working_mesh, &supertriangle);
-    }
-    if (status != TM_OK) {
+    /* Seed the actual convex hull. A finite supertriangle can steal real
+     * hull triangles whose circumcircles extend far beyond a thin domain. */
+    hull = (size_t *) malloc(2 * input_count * sizeof(*hull));
+    on_hull = (unsigned char *) calloc(input_count, sizeof(*on_hull));
+    if (hull == NULL || on_hull == NULL) {
+        status = TM_ERR_ALLOC;
         goto cleanup;
+    }
+    for (i = 0; i < input_count; ++i) {
+        while (hull_count >= 2 && tm_orient_value(&working_points[hull[hull_count - 2]],
+               &working_points[hull[hull_count - 1]], &working_points[i]) <= 0.0)
+            hull_count--;
+        hull[hull_count++] = i;
+    }
+    {
+        size_t lower_count = hull_count;
+        for (i = input_count - 1; i-- > 0;) {
+            while (hull_count > lower_count && tm_orient_value(&working_points[hull[hull_count - 2]],
+                   &working_points[hull[hull_count - 1]], &working_points[i]) <= 0.0)
+                hull_count--;
+            hull[hull_count++] = i;
+        }
+        hull_count--; /* Repeated first vertex. */
+    }
+    for (i = 0; i < hull_count; ++i) {
+        int point_index;
+        on_hull[hull[i]] = 1;
+        status = tm_append_point(&working_mesh, working_points[hull[i]].xy,
+                  working_points[hull[i]].original_index, TM_VERTEX_INPUT, &point_index);
+        if (status != TM_OK) goto cleanup;
+        if (i >= 2) {
+            TMTriangle triangle;
+            int triangle_index = (int) working_mesh.triangle_count;
+            if (!tm_make_triangle(&triangle, 0, (int)i - 1, (int)i, working_mesh.points)) {
+                status = TM_ERR_INTERNAL;
+                goto cleanup;
+            }
+            status = tm_append_triangle(&working_mesh, &triangle);
+            if (status != TM_OK) goto cleanup;
+            if (i > 2) {
+                size_t j;
+                for (j = 0; j < (size_t)triangle_index; ++j) {
+                    int edge = tm_find_edge_in_triangle(&working_mesh.triangles[j], 0, (int)i - 1);
+                    if (edge >= 0 && working_mesh.triangles[j].nbr[edge] < 0) {
+                        status = tm_link_triangles_across_edge(&working_mesh, (int)j, triangle_index, 0, (int)i - 1);
+                        break;
+                    }
+                }
+                if (j == (size_t)triangle_index) status = TM_ERR_INTERNAL;
+                if (status != TM_OK) goto cleanup;
+            }
+            tm_assign_incident_triangle(&working_mesh, 0, triangle_index);
+            tm_assign_incident_triangle(&working_mesh, (int)i - 1, triangle_index);
+            tm_assign_incident_triangle(&working_mesh, (int)i, triangle_index);
+            status = tm_legalize_point_star(&working_mesh, (int)i, &triangle_index, 1);
+            if (status != TM_OK) goto cleanup;
+            start_triangle = triangle_index;
+        }
     }
 
     for (i = 0; i < input_count; ++i) {
         TMLocation location;
         int inserted_point = -1;
+
+        if (on_hull[i]) continue;
 
         status = tm_locate_point(&working_mesh, working_points[i].xy, start_triangle, &location);
         if (status != TM_OK) {
@@ -887,13 +873,7 @@ TMStatus tm_build_mesh(const TMPoint *input_points, size_t input_count, TMMesh *
         }
     }
 
-    for (i = 0; i < working_mesh.triangle_count; ++i) {
-        if (working_mesh.triangles[i].v[0] >= 3 &&
-            working_mesh.triangles[i].v[1] >= 3 &&
-            working_mesh.triangles[i].v[2] >= 3) {
-            final_count += 1;
-        }
-    }
+    final_count = working_mesh.triangle_count;
 
     if (final_count == 0) {
         status = TM_ERR_INTERNAL;
@@ -929,9 +909,7 @@ TMStatus tm_build_mesh(const TMPoint *input_points, size_t input_count, TMMesh *
     out_mesh->triangle_count = 0;
 
     for (i = 0; i < working_mesh.triangle_count; ++i) {
-        if (working_mesh.triangles[i].v[0] >= 3 &&
-            working_mesh.triangles[i].v[1] >= 3 &&
-            working_mesh.triangles[i].v[2] >= 3) {
+        {
             TMTriangle triangle;
             int a = working_mesh.points[working_mesh.triangles[i].v[0]].original_index;
             int b = working_mesh.points[working_mesh.triangles[i].v[1]].original_index;
@@ -960,6 +938,8 @@ TMStatus tm_build_mesh(const TMPoint *input_points, size_t input_count, TMMesh *
 cleanup:
     tm_free_mesh(&working_mesh);
     free(working_points);
+    free(hull);
+    free(on_hull);
 
     if (status != TM_OK) {
         tm_free_mesh(out_mesh);
@@ -1366,16 +1346,14 @@ TMStatus tm_locate_point(const TMMesh *mesh, const double point[2], int start_tr
             int a;
             int b;
             double side;
-            int near_edge;
 
             tm_triangle_edge_vertices(triangle, edge, &a, &b);
             side = tm_orient_coords(&mesh->points[a], &mesh->points[b], point);
-            near_edge = tm_point_nearly_on_segment(&mesh->points[a], &mesh->points[b], point);
-            if (side < 0.0 && !near_edge) {
+            if (side < 0.0) {
                 boundary_edge = edge;
                 break;
             }
-            if (side == 0.0 || near_edge) {
+            if (side == 0.0) {
                 on_edge = edge;
             }
         }
